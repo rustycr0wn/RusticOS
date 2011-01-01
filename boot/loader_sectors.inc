@@ -1,3 +1,3 @@
 %ifndef LOADER_SECTORS
-LOADER_SECTORS equ 1
+LOADER_SECTORS equ 2
 %endif

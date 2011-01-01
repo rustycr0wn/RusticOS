@@ -3,21 +3,54 @@
 
 %include "boot/loader_sectors.inc"
 
+; Short jump + NOP so strict BIOS accept this as a VBR
+jmp short start
+nop
+
+; Minimal BIOS Parameter Block (BPB) to satisfy BIOS heuristics
+OEMLabel        db 'RUSTICOS'
+BytesPerSector  dw 512
+SectorsPerCluster db 1
+ReservedSectors dw 1
+NumberOfFATs    db 1
+RootDirEntries  dw 224
+TotalSectors16  dw 2880
+MediaDescriptor db 0xF0
+SectorsPerFAT16 dw 9
+SectorsPerTrack dw 18
+NumberOfHeads   dw 2
+HiddenSectors   dd 0
+TotalSectors32  dd 0
+
+PART_BASE_PTR   equ 0x0600            ; physical 0:0x0600 stores partition base LBA (qword)
+
 start:
     cli
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00
+    mov sp, 0x9000
 
     ; Preserve BIOS-provided boot drive
     mov [boot_drive], dl
+    mov byte [dl_toggled], 0
 
-    ; Stage: MBR start
+    ; Save partition base LBA (HiddenSectors) to 0:PART_BASE_PTR (8 bytes, high dword 0)
+    xor ax, ax
+    mov es, ax
+    mov di, PART_BASE_PTR
+    mov eax, [HiddenSectors]
+    stosw                    ; low word
+    shr eax, 16
+    stosw                    ; low dword high word
+    xor ax, ax
+    stosw                    ; high dword low word
+    stosw                    ; high dword high word
+
+    ; Stage: VBR start
     mov si, msg_mbr_start
     call bios_print
-    call delay_500ms
 
     ; Reset boot drive to a known state
     mov dl, [boot_drive]
@@ -27,30 +60,31 @@ start:
     ; Stage: prepare DAP
     mov si, msg_mbr_prep
     call bios_print
-    call delay_500ms
 
     ; Prepare Disk Address Packet (DAP)
     mov word [dap.count], LOADER_SECTORS
     mov word [dap.buf_off], 0x0000
     mov word [dap.buf_seg], 0x1000
-    mov dword [dap.lba_low], 1
+    ; LBA = HiddenSectors + 1 (Loader starts right after VBR within partition)
+    mov eax, [HiddenSectors]
+    add eax, 1
+    mov [dap.lba_low], eax
     mov dword [dap.lba_high], 0
 
     ; Check for INT 13h Extensions (EDD) support on this drive
     mov dl, [boot_drive]
     mov ax, 0x4100
-    mov bx, 0xaa55
+    mov bx, 0x55aa
     int 0x13
     jc .edd_fail
-    cmp bx, 0xAA55
+    cmp bx, 0x55aa
     jne .edd_fail
 
     ; Stage: using EDD
     mov si, msg_mbr_edd
     call bios_print
-    call delay_500ms
 
-    ; Read loader via LBA (starting at LBA 1)
+    ; Read loader via LBA
     mov si, msg_load
     call bios_print
 
@@ -64,6 +98,13 @@ start:
     mov dl, [boot_drive]
     int 0x13
     jnc .success
+    ; on first failure try toggling DL to 0x80 once
+    cmp byte [dl_toggled], 0
+    jne .edd_after_toggle
+    mov byte [dl_toggled], 1
+    mov dl, 0x80
+    mov [boot_drive], dl
+.edd_after_toggle:
     ; reset and retry
     xor ah, ah
     int 0x13
@@ -72,51 +113,14 @@ start:
     jmp .edd_fail
 
 .edd_fail:
-    ; Stage: falling back to CHS
-    mov si, msg_mbr_chs
-    call bios_print
-    call delay_500ms
-
-    ; Fallback: CHS read starting at C=0,H=0,S=2
-    mov dl, [boot_drive]
-    mov ax, 0x1000
-    mov es, ax
-    xor bx, bx               ; destination offset
-
-    mov cl, 2                ; sector 2
-    xor ch, ch               ; cylinder 0
-    xor dh, dh               ; head 0
-
-    mov bp, LOADER_SECTORS
-.chs_loop:
-    cmp bp, 0
-    jz .success
-
-    mov byte [retry], 3
-.chs_try:
-    mov ah, 0x02             ; read
-    mov al, 1                ; one sector
-    mov dl, [boot_drive]
-    int 0x13
-    jnc .chs_ok
-    ; reset and retry
-    xor ah, ah
-    int 0x13
-    dec byte [retry]
-    jnz .chs_try
+    ; EDD not available; cannot reliably CHS relative to partition. Abort.
     jmp disk_error
-.chs_ok:
-    add bx, 512
-    inc cl
-    dec bp
-    jmp .chs_loop
 
 .success:
     ; Stage: jump to loader
     mov si, msg_mbr_jump
     call bios_print
-    ; Remove delay for faster boot
-    ; Success: print prompt and jump to loader at 0x1000:0x0000
+    ; Jump to loader at 0x1000:0x0000
     xor ax, ax
     mov ds, ax               ; DS=0 for message pointers
     mov ax, 0x1000
@@ -142,33 +146,19 @@ bios_print:
 .done:
     ret
 
-; ~500ms delay using PIT tick polling fallback to IO stalls
-; (crude but sufficient for staging)
-delay_500ms:
-    push cx
-    push dx
-    mov cx, 200000
-.dl:
-    out 0x80, al
-    loop .dl
-    pop dx
-    pop cx
-    ret
-
 ; ----------------------
 ; Data
 ; ----------------------
 boot_drive db 0
 retry      db 0
+dl_toggled db 0
 
-msg_mbr_start db "[MBR] start", 13, 10, 0
-msg_mbr_prep  db "[MBR] prep DAP", 13, 10, 0
-msg_mbr_edd   db "[MBR] EDD available", 13, 10, 0
-msg_mbr_chs   db "[MBR] EDD fail -> CHS", 13, 10, 0
-msg_load      db "[MBR] loading loader...", 13, 10, 0
-msg_mbr_jump  db "[MBR] jumping to loader", 13, 10, 0
+msg_mbr_start db "[VBR] start", 13, 10, 0
+msg_mbr_prep  db "[VBR] prep DAP", 13, 10, 0
+msg_mbr_edd   db "[VBR] EDD available", 13, 10, 0
+msg_load      db "[VBR] loading loader...", 13, 10, 0
+msg_mbr_jump  db "[VBR] jumping to loader", 13, 10, 0
 msg_err       db 'Disk read error', 13, 10, 0
-msg_mbr       db 'MBR> ', 0
 
 ; Disk Address Packet (for INT 13h AH=42h)
 ; size(16), reserved(0), count, buffer offset, buffer segment, starting LBA (dq)
@@ -196,4 +186,4 @@ disk_error:
 
 ; Pad to 512 bytes and add signature
 times 510-($-$$) db 0
-    dw 0xaa55
+    dw 0xAA55

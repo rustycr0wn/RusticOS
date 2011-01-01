@@ -12,6 +12,21 @@ static FileNode node_pool[MAX_NODES];
 static bool node_used[MAX_NODES];
 static uint32_t next_node = 0;
 
+// Simple data pool for file contents (64 KiB)
+static const uint32_t DATA_POOL_SIZE = 64 * 1024;
+static char data_pool[DATA_POOL_SIZE];
+static uint32_t data_pool_offset = 0;
+
+static char* allocate_data(uint32_t size, uint32_t& out_capacity) {
+    // Align to 16 bytes
+    uint32_t aligned = (size + 15) & ~15U;
+    if (data_pool_offset + aligned > DATA_POOL_SIZE) return nullptr;
+    char* ptr = &data_pool[data_pool_offset];
+    out_capacity = aligned;
+    data_pool_offset += aligned;
+    return ptr;
+}
+
 // Helper function to copy strings safely
 static void safe_strcpy(char* dest, const char* src, uint32_t max_len) {
     uint32_t i = 0;
@@ -139,6 +154,7 @@ bool FileSystem::mkdir(const char* name) {
     new_dir->child_count = 0;
     new_dir->size = 0;
     new_dir->data = nullptr;
+    new_dir->data_capacity = 0;
     
     // Initialize children array
     for (uint32_t i = 0; i < MAX_DIRECTORY_ENTRIES; i++) {
@@ -276,10 +292,15 @@ bool FileSystem::create_file(const char* name, const char* content) {
     new_file->parent = current_directory;
     new_file->child_count = 0;
     new_file->size = 0;
-    new_file->data = nullptr;
-    
-    // For now, we'll skip file content storage to keep it simple
-    // In a real implementation, you'd need a separate memory pool for file data
+    // Allocate minimal data buffer initially
+    new_file->data_capacity = 128;
+    new_file->data = allocate_data(new_file->data_capacity, new_file->data_capacity);
+    if (!new_file->data) {
+        // Allocation failed; deallocate node and abort
+        deallocate_node(new_file);
+        return false;
+    }
+    if (new_file->data_capacity > 0) new_file->data[0] = '\0';
     
     // Add to parent's children
     current_directory->children[current_directory->child_count] = new_file;
@@ -322,8 +343,9 @@ bool FileSystem::read_file(const char* name, char* buffer, uint32_t max_size) {
         return false;
     }
     
-    uint32_t copy_size = (file->size < max_size - 1) ? file->size : max_size - 1;
-    safe_strcpy(buffer, file->data, copy_size + 1);
+    uint32_t copy_size = (file->size < (max_size > 0 ? max_size - 1 : 0)) ? file->size : (max_size > 0 ? max_size - 1 : 0);
+    for (uint32_t i = 0; i < copy_size; ++i) buffer[i] = file->data[i];
+    if (max_size > 0) buffer[copy_size] = '\0';
     return true;
 }
 
@@ -335,10 +357,24 @@ bool FileSystem::write_file(const char* name, const char* content) {
         return false;
     }
     
-    // For now, we'll skip file content storage to keep it simple
-    // In a real implementation, you'd need a separate memory pool for file data
     uint32_t content_len = safe_strlen(content);
-    file->size = content_len;
+    // Ensure capacity
+    if (content_len + 1 > file->data_capacity) {
+        uint32_t new_cap = content_len + 1;
+        char* new_data = allocate_data(new_cap, new_cap);
+        if (!new_data) return false;
+        // Copy old content
+        uint32_t old_len = file->size;
+        if (file->data && old_len > 0) {
+            for (uint32_t i = 0; i < old_len && i < new_cap; ++i) new_data[i] = file->data[i];
+        }
+        file->data = new_data;
+        file->data_capacity = new_cap;
+    }
+    // Copy new content
+    for (uint32_t i = 0; i < content_len && i < file->data_capacity - 1; ++i) file->data[i] = content[i];
+    if (file->data_capacity > 0) file->data[(content_len < file->data_capacity) ? content_len : (file->data_capacity - 1)] = '\0';
+    file->size = (content_len < file->data_capacity) ? content_len : (file->data_capacity - 1);
     
     return true;
 }

@@ -35,7 +35,7 @@ private:
     // Persistence helpers
     void save_to_disk();
     bool load_from_disk();
-
+    
     // Helper functions
     FileNode* find_child(FileNode* parent, const char* name);
     void free_node(FileNode* node);

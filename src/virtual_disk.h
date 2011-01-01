@@ -20,4 +20,4 @@ public:
 
 extern VirtualDisk vdisk;
 
-#endif // VIRTUAL_DISK_H 
+#endif // VIRTUAL_DISK_H

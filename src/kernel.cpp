@@ -84,14 +84,17 @@ bool poll_keyboard() {
     if (ascii != 0) {
         // Process the character
         if (ascii == '\n') {
+            // Move cursor to new line before executing to ensure output starts on its own line
+            terminal.putChar('\n');
             // Mark input as complete and execute command
             command_system.process_input('\n');
             command_system.execute_command();
-            // Move to new line and show new prompt
-            terminal.write("\n> ");
-            // Record prompt start position (protect from backspace)
+            // Show new prompt
+            terminal.write(">");
+            // Record prompt start position (protect from backspace) and place cursor after prompt
             prompt_start_x = terminal.getCursorX();
             prompt_start_y = terminal.getCursorY();
+            terminal.setCursor(prompt_start_x, prompt_start_y);
         } else if (ascii == '\b') {
             // Handle backspace: update input buffer and visually erase last char without printing '\b'
             command_system.process_input(ascii);
@@ -102,7 +105,7 @@ bool poll_keyboard() {
             bool can_delete = (curY > prompt_start_y) || (curY == prompt_start_y && curX > prompt_start_x);
             if (can_delete && curX > 0) {
                 terminal.setCursor(curX - 1, curY);
-                terminal.putChar(' ');
+            terminal.putChar(' ');
                 terminal.setCursor(curX - 1, curY);
             }
         } else {
@@ -119,6 +122,7 @@ bool poll_keyboard() {
 extern "C" void kernel_main() {
     // Initialize components
     terminal.clear();
+    terminal.showCursor(true);
     
     // Draw header (row 0) with green background, black text, full width
     terminal.setColor(TerminalColor::BLACK, TerminalColor::GREEN);
@@ -142,9 +146,10 @@ extern "C" void kernel_main() {
     terminal.write("Root filesystem mounted at '/'\n\n");
     
     // Show initial prompt
-    terminal.write("> ");
+    terminal.write(">");
     prompt_start_x = terminal.getCursorX();
     prompt_start_y = terminal.getCursorY();
+    terminal.setCursor(prompt_start_x, prompt_start_y);
     
     // Main kernel loop
     while (true) {

@@ -160,11 +160,12 @@ void Terminal::showCursor(bool show) {
 }
 
 void Terminal::update_cursor() {
-    // Disable hardware cursor I/O during early boot to avoid potential exceptions.
-    // Keep state only; omit outb accesses to 0x3D4/0x3D5.
-    (void)cursor_visible;
-    (void)cursor_x;
-    (void)cursor_y;
+    // Program VGA hardware cursor to follow cursor_x/cursor_y
+    uint16_t pos = (uint16_t)(cursor_y * VGA_WIDTH + cursor_x);
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
 }
 
 void Terminal::scrollUp(uint16_t lines) {

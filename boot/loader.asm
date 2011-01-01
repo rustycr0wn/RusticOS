@@ -16,6 +16,7 @@
 kernel_sectors      equ KERNEL_SECTORS
 SEG_BASE            equ 0x1000
 KERNEL_LBA_START    equ (1 + LOADER_SECTORS)
+PART_BASE_PTR       equ 0x0600
 
 ; Code starts immediately
 loader_start:
@@ -39,11 +40,27 @@ loader_start:
     call bios_print
     call delay_500ms
 
+    ; Load partition base LBA (qword at 0:PART_BASE_PTR) into edx:eax
+    xor ax, ax
+    mov es, ax
+    mov di, PART_BASE_PTR
+    ; read low dword
+    mov bx, [es:di]
+    mov cx, [es:di+2]
+    mov eax, ebx
+    and eax, 0x0000FFFF
+    shl ecx, 16
+    or eax, ecx
+    ; high dword assumed zero
+    xor edx, edx
+
     mov word [count], 1
     mov word [buf_off], 0x0000
     mov word [buf_seg], 0x2000
+    ; base LBA for kernel = partition_base + KERNEL_LBA_START
     mov dword [lba_low], KERNEL_LBA_START
-    mov dword [lba_high], 0
+    add dword [lba_low], eax
+    adc dword [lba_high], edx
     mov cx, kernel_sectors
 .read_lba_loop:
     cmp cx, 0

@@ -89,7 +89,20 @@ void CommandSystem::execute_command() {
     } else if (safe_strcmp(cmd.name, "makefile")) {
         if (cmd.arg_count >= 1) {
             const char* name = cmd.args[0];
-            const char* content = (cmd.arg_count >= 2) ? cmd.args[1] : "";
+            // Join remaining args with spaces as file content
+            char content_buf[MAX_COMMAND_LENGTH];
+            uint32_t pos = 0;
+            for (uint32_t ai = 1; ai < cmd.arg_count && pos < MAX_COMMAND_LENGTH - 1; ++ai) {
+                const char* part = cmd.args[ai];
+                for (uint32_t i = 0; part[i] != '\0' && pos < MAX_COMMAND_LENGTH - 1; ++i) {
+                    content_buf[pos++] = part[i];
+                }
+                if (ai + 1 < cmd.arg_count && pos < MAX_COMMAND_LENGTH - 1) {
+                    content_buf[pos++] = ' ';
+                }
+            }
+            content_buf[pos] = '\0';
+            const char* content = content_buf;
             cmd_makefile(name, content);
         } else {
             terminal.write("makefile: missing operand\n");
@@ -126,7 +139,7 @@ void CommandSystem::parse_command(const char* input, Command& cmd) {
     // Skip leading spaces
     uint32_t i = 0;
     while (input[i] == ' ' || input[i] == '\t') i++;
-
+    
     // Parse command name
     uint32_t name_pos = 0;
     while (input[i] != '\0' && input[i] != ' ' && input[i] != '\t' && name_pos < MAX_COMMAND_LENGTH - 1) {
@@ -182,24 +195,14 @@ void CommandSystem::cmd_makedir(const char* name) {
 }
 
 void CommandSystem::cmd_makefile(const char* name, const char* content) {
-    // If more than one extra arg was provided, join them with spaces
-    char content_buf[MAX_COMMAND_LENGTH];
-    content_buf[0] = '\0';
-    if (input_buffer[0] != '\0') {
-        // Re-parse to find all args already in cmd; this function is called with first content token
-        // As a simpler approach without re-parsing, if content is non-empty, use it; otherwise leave empty
-    }
-
-    const char* final_content = content ? content : "";
-    if (!filesystem.create_file(name, final_content)) {
+    if (!filesystem.create_file(name, "")) {
         terminal.write("makefile: cannot create file '");
         terminal.write(name);
         terminal.write("'\n");
         return;
     }
-    // Optionally write content if provided
-    if (final_content[0] != '\0') {
-        filesystem.write_file(name, final_content);
+    if (content && content[0] != '\0') {
+        filesystem.write_file(name, content);
     }
 }
 
@@ -213,6 +216,7 @@ void CommandSystem::cmd_chdir(const char* path) {
 
 void CommandSystem::cmd_cwd() {
     const char* current_path = filesystem.pwd();
+    terminal.write("\n");
     terminal.write(current_path);
     terminal.write("\n");
 }
