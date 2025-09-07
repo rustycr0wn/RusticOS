@@ -136,6 +136,18 @@ read_lba_loop:
     ; Decrease remaining
     dec word [remaining]
 
+    ; Progress dot at row 4 advancing by two chars
+    push ax
+    push es
+    mov ax, 0xb800
+    mov es, ax
+    add di, 2
+    mov al, '.'
+    mov ah, 0x02
+    stosw
+    pop es
+    pop ax
+
     jmp read_lba_loop
 
 read_done:
@@ -188,14 +200,14 @@ protected_mode_entry:
     mov gs, ax
     mov ss, ax
 
-    ; DEBUG: Write 'E' at VGA row 7
+    ; DEBUG: Print "PM entry" at VGA row 7
     mov ax, 0x10
-    mov ds, ax
     mov es, ax
     mov edi, (0xB8000 + 80*7*2)
-    mov ax, 0x0200
-    add ax, 'E'
-    stosw
+    mov esi, pm_entry_msg + (SEG_BASE << 4)
+    mov ah, 0x02 ; green on black
+    call print_string_vga_color32
+    call delay_200ms32
 
     ; 32-bit stack (same as before)
     mov esp, 0x0090000
@@ -206,31 +218,14 @@ protected_mode_entry:
     mov ecx, (kernel_sectors * 128)     ; sectors * 512 bytes / 4 bytes per dword
     rep movsd
 
-    ; Verify kernel image at 0x00100000 is non-zero before jump
-    mov eax, [0x00100000]
-    test eax, eax
-    jnz .kernel_ok
-    ; Show 'Z' (error) at row 6 and halt if empty
+    ; DEBUG: Print "Kernel jump" at VGA row 8
     mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov edi, (0xB8000 + 80*6*2)
-    mov ax, 0x0400
-    add ax, 'Z'
-    stosw
-.halt_here:
-    hlt
-    jmp .halt_here
-.kernel_ok:
-
-    ; DEBUG: Write 'J' at VGA row 8
-    mov ax, 0x10
-    mov ds, ax
     mov es, ax
     mov edi, (0xB8000 + 80*8*2)
-    mov ax, 0x0200
-    add ax, 'J'
-    stosw
+    mov esi, kernel_jump_msg + (SEG_BASE << 4)
+    mov ah, 0x02 ; green on black
+    call print_string_vga_color32
+    call delay_200ms32
 
     ; Jump to kernel entry (linked for 0x00100000)
     jmp dword 0x08:0x00100000
@@ -354,7 +349,6 @@ print_string_vga_color:
     ret
 
 ; Minimal VGA print routine for 32-bit (ES:EDI, ESI=string, AH=color)
-[bits 32]
 print_string_vga_color32:
     lodsb
     or al, al
@@ -363,7 +357,6 @@ print_string_vga_color32:
     jmp print_string_vga_color32
 .done:
     ret
-[bits 16]
 
 ; BIOS teletype print (SI=ASCIIZ)
 bios_print:
