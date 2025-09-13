@@ -1,30 +1,30 @@
 # ============================================================================
 # RusticOS - 32-bit Startup (crt0)
 # ----------------------------------------------------------------------------
-# Minimal and robust 32-bit startup:
-#   - CPU is already in protected mode (set by the loader)
-#   - Set flat data segments and a stack
-#   - Safely clear .bss
-#   - Run C++ global constructors (.init_array then .ctors fallback)
-#   - Call kernel_main()
-#
-# Notes:
-#   - Interrupts remain disabled (cli) to avoid IRQs during early init
-#   - No IDT is installed here to keep early boot simple and reliable
-#   - VGA text buffer is at 0xB8000 for optional debug
+# Minimal and robust 32-bit startup
 # ============================================================================
 
 .global _start
 .extern kernel_main
 
-.section .text
+.section .text._start
 .code32
 
 _start:
-    # Disable interrupts during early init
     cli
+    mov $0xb8000, %edi
+    mov $0x1f4b, %eax   # K in green
+    mov %eax, (%edi)
 
-    # Load flat data segments (match GDT: code=0x08, data=0x10)
+    # Load GDT
+    lea gdt_ptr, %eax
+    lgdt (%eax)
+
+    mov $0xb8002, %edi
+    mov $0x1f47, %eax   # G in green
+    mov %eax, (%edi)
+
+    # Set segment registers (must be after GDT load)
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
@@ -32,68 +32,119 @@ _start:
     mov %ax, %gs
     mov %ax, %ss
 
-    # Set up a 32-bit stack (grows down)
-    mov $0x90000, %esp
-
-    # Optional debug: write 'C' at top-left to confirm entry
-    mov $0xb8000, %edi
-    mov $0x1f43, %eax   # 'C' white on blue
+    mov $0xb8004, %edi
+    mov $0x1f53, %eax   # S in green
     mov %eax, (%edi)
 
-    # ------------------------------------------------------------------
-    # Zero the .bss section (guarded against mis-ordered symbols)
-    # ------------------------------------------------------------------
+    # Disable NMI and mask PIC IRQs
+    mov $0x70, %dx
+    inb (%dx), %al
+    orb $0x80, %al
+    outb %al, (%dx)
+    mov $0x21, %dx
+    mov $0xFF, %al
+    outb %al, (%dx)
+    mov $0xA1, %dx
+    outb %al, (%dx)
+
+    mov $0xb8006, %edi
+    mov $0x1f4e, %eax   # N in green
+    mov %eax, (%edi)
+
+    # Build a tiny IDT with a single halting handler for all vectors
+    lea idt, %edi
+    xor %eax, %eax
+    mov $256*8/4, %ecx
+    rep stosl                      # zero IDT
+
+    # Construct an interrupt gate descriptor (type 0x8E) to isr_stub
+    lea isr_stub, %eax             # handler offset
+    mov %ax, %dx                   # low 16 bits
+    mov $0x08, %bx                 # code segment selector
+    mov $0x8E00, %cx               # type and attr
+    # Fill all 256 entries
+    mov $0, %esi                   # i = 0
+.fill_idt:
+    mov %dx, idt+0(%esi)           # offset_low
+    mov %bx, idt+2(%esi)           # selector
+    mov $0, %ax
+    mov %ax, idt+4(%esi)           # zero
+    mov %cx, idt+5(%esi)           # type_attr
+    shr $16, %eax                  # eax now high 16 of handler
+    mov %ax, idt+6(%esi)           # offset_high
+    lea isr_stub, %eax             # restore eax to full handler for next iter
+    add $8, %esi
+    cmp $256*8, %esi
+    jl .fill_idt
+
+    # Load IDT
+    lea idt_ptr, %eax
+    lidt (%eax)
+
+    # After loading IDT
+    mov $0xb8008, %edi
+    mov $0x1f49, %eax   # I in green
+    mov %eax, (%edi)
+
+    # Stack
+    mov $0x90000, %esp
+    and $~0xF, %esp          # align to 16 bytes
+
+    # After setting up stack
+    mov $0xb800A, %edi
+    mov $0x1f42, %eax   # B in green
+    mov %eax, (%edi)
+
+    # Clear .bss
     cld
-    mov $__bss_start, %edi        # EDI = start of .bss
-    mov $__bss_end, %ecx          # ECX = end of .bss
-    sub %edi, %ecx                # ECX = size in bytes
-    jbe .after_bss                # if end <= start, skip
-    xor %eax, %eax                # fill with zeros
+    mov $__bss_start, %edi
+    mov $__bss_end, %ecx
+    sub %edi, %ecx
+    jbe .after_bss
+    xor %eax, %eax
     rep stosb
 .after_bss:
 
-    # ------------------------------------------------------------------
-    # Run C++ global constructors (init_array then ctors fallback)
-    # ------------------------------------------------------------------
-    # init_array: array of pointers to void (*)()
-    mov $__init_array_start, %ebx
-    mov $__init_array_end, %edx
-.init_array_loop:
-    cmp %ebx, %edx
-    jge .after_init_array
-    mov (%ebx), %eax
-    add $4, %ebx
-    test %eax, %eax
-    jz .init_array_loop
-    call *%eax
-    jmp .init_array_loop
-.after_init_array:
-
-    # ctors fallback: iterate backwards, skip -1 sentinel and nulls
-    mov $__ctors_end, %ebx      # one past last
-    mov $__ctors_start, %edx
-.ctors_loop_rev:
-    cmp %edx, %ebx
-    jge .after_ctors
-    sub $4, %ebx
-    mov (%ebx), %eax
-    cmp $-1, %eax
-    je .ctors_loop_rev
-    test %eax, %eax
-    jz .ctors_loop_rev
-    call *%eax
-    jmp .ctors_loop_rev
-.after_ctors:
-
-    # Optional debug: mark 'M' at (row 0, col 1) before kernel_main
+    # Debug M
     mov $0xb8002, %edi
-    mov $0x1f4d, %eax   # 'M' white on blue
+    mov $0x1f4d, %eax
     mov %eax, (%edi)
 
-    # Call C++ kernel main function
+    # Before calling kernel_main
+    mov $0xb800C, %edi
+    mov $0x1f4D, %eax   # M in green
+    mov %eax, (%edi)
+
     call kernel_main
 
-    # If kernel_main returns, halt forever
 .hang:
     hlt
     jmp .hang
+
+# ---------------- Data: IDT ----------------
+.section .data
+.align 8
+idt:
+    .space 256*8, 0
+idt_ptr:
+    .word (256*8 - 1)
+    .long idt
+
+# ---------------- Data: GDT ----------------
+.align 8
+gdt:
+    .quad 0x0000000000000000     # Null descriptor
+    .quad 0x00cf9a000000ffff     # Code segment: base=0, limit=4GB, type=0x9A
+    .quad 0x00cf92000000ffff     # Data segment: base=0, limit=4GB, type=0x92
+
+gdt_ptr:
+    .word (3*8 - 1)
+    .long gdt
+
+# Halting ISR stub
+.section .text
+.align 16
+isr_stub:
+    cli
+1:  hlt
+    jmp 1b

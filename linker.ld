@@ -10,6 +10,7 @@ SECTIONS
     
     /* Text section (code) */
     .text : {
+        KEEP(*(.text._start))
         *(.text)
         *(.text.*)
     }
@@ -57,4 +58,4 @@ SECTIONS
         *(.eh_frame)
         *(.eh_frame_hdr)
     }
-} 
+}
