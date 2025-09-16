@@ -1,61 +1,141 @@
-/* Minimal RusticOS kernel: clear screen, print header, halt */
+/* RusticOS kernel with command-line interface and filesystem */
 #include <stdint.h>
+#include "terminal.h"
+#include "keyboard.h"
+#include "filesystem.h"
+#include "command.h"
+
+// Simple keyboard input polling (since we don't have interrupts set up yet)
+static inline uint8_t inb(uint16_t port) {
+    uint8_t result;
+    __asm__ __volatile__("inb %1, %0" : "=a"(result) : "Nd"(port));
+    return result;
+}
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
-static inline void vga_clear(uint8_t fg, uint8_t bg) {
-    volatile uint16_t* const vga = (volatile uint16_t*)0xB8000;
-    uint16_t attr = (uint16_t)(((uint16_t)bg << 4) | (fg & 0x0F)) << 8;
-    for (int i = 0; i < 80 * 25; ++i) vga[i] = attr | ' ';
-}
-
-static inline void vga_puts_at(int x, int y, const char* s, uint8_t fg, uint8_t bg) {
-    volatile uint16_t* const vga = (volatile uint16_t*)0xB8000;
-    uint16_t attr = (uint16_t)(((uint16_t)bg << 4) | (fg & 0x0F)) << 8;
-    int idx = y * 80 + x;
-    while (*s && idx < 80 * 25) {
-        vga[idx++] = attr | (uint8_t)(*s++);
+// Simple keyboard polling function
+bool poll_keyboard() {
+    // Check if keyboard has data
+    if ((inb(0x64) & 0x01) == 0) {
+        return false; // No data available
     }
-}
-
-static inline void set_cursor_position(int x, int y) {
-    uint16_t pos = y * 80 + x;
     
-    // VGA cursor control ports
-    outb(0x3D4, 0x0F);  // Low byte
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-    outb(0x3D4, 0x0E);  // High byte
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+    uint8_t scan_code = inb(0x60);
+    
+    // Handle key press/release
+    bool key_released = (scan_code & 0x80) != 0;
+    uint8_t key_code = scan_code & 0x7F;
+    
+    if (key_released) {
+        return false; // Ignore key releases for now
+    }
+    
+    // Convert scan code to ASCII (simplified)
+    char ascii = 0;
+    switch (key_code) {
+        case 0x02: ascii = '1'; break;
+        case 0x03: ascii = '2'; break;
+        case 0x04: ascii = '3'; break;
+        case 0x05: ascii = '4'; break;
+        case 0x06: ascii = '5'; break;
+        case 0x07: ascii = '6'; break;
+        case 0x08: ascii = '7'; break;
+        case 0x09: ascii = '8'; break;
+        case 0x0A: ascii = '9'; break;
+        case 0x0B: ascii = '0'; break;
+        case 0x0E: ascii = '\b'; break; // Backspace
+        case 0x1C: ascii = '\n'; break; // Enter
+        case 0x39: ascii = ' '; break;  // Space
+        case 0x10: ascii = 'q'; break;
+        case 0x11: ascii = 'w'; break;
+        case 0x12: ascii = 'e'; break;
+        case 0x13: ascii = 'r'; break;
+        case 0x14: ascii = 't'; break;
+        case 0x15: ascii = 'y'; break;
+        case 0x16: ascii = 'u'; break;
+        case 0x17: ascii = 'i'; break;
+        case 0x18: ascii = 'o'; break;
+        case 0x19: ascii = 'p'; break;
+        case 0x1E: ascii = 'a'; break;
+        case 0x1F: ascii = 's'; break;
+        case 0x20: ascii = 'd'; break;
+        case 0x21: ascii = 'f'; break;
+        case 0x22: ascii = 'g'; break;
+        case 0x23: ascii = 'h'; break;
+        case 0x24: ascii = 'j'; break;
+        case 0x25: ascii = 'k'; break;
+        case 0x26: ascii = 'l'; break;
+        case 0x2C: ascii = 'z'; break;
+        case 0x2D: ascii = 'x'; break;
+        case 0x2E: ascii = 'c'; break;
+        case 0x2F: ascii = 'v'; break;
+        case 0x30: ascii = 'b'; break;
+        case 0x31: ascii = 'n'; break;
+        case 0x32: ascii = 'm'; break;
+        default: return false;
+    }
+    
+    if (ascii != 0) {
+        // Process the character
+        if (ascii == '\n') {
+            // Execute command
+            command_system.execute_command();
+            // Show new prompt
+            terminal.write("> ");
+        } else if (ascii == '\b') {
+            // Handle backspace
+            command_system.process_input(ascii);
+            terminal.putChar('\b');
+            terminal.putChar(' ');
+            terminal.putChar('\b');
+        } else {
+            // Regular character
+            command_system.process_input(ascii);
+            terminal.putChar(ascii);
+        }
+        return true;
+    }
+    
+    return false;
 }
 
 extern "C" void kernel_main() {
-    // Colors
-    const uint8_t FG_BLACK = 0x0;
-    const uint8_t FG_GREEN = 0x2;
-    const uint8_t BG_GREEN = 0x2;
-    const uint8_t BG_BLACK = 0x0;
-    // Clear screen to black
-    vga_clear(FG_GREEN, BG_BLACK);
-
+    // Initialize components
+    terminal.clear();
+    
     // Draw header (row 0) with green background, black text, full width
+    terminal.setColor(TerminalColor::BLACK, TerminalColor::GREEN);
     const char* title = "RusticOS        Level: Kernel        Version:1.0.0";
     int len = 50;
     int x = (80 - len) / 2;
     for (int col = 0; col < 80; ++col) {
         char ch = (col >= x && col < x + len) ? title[col - x] : ' ';
-        vga_puts_at(col, 0, &ch, FG_BLACK, BG_GREEN);
+        terminal.writeAt(&ch, col, 0);
     }
-
-    // Print prompt "> " at start of row 1
-    vga_puts_at(0, 1, ">", FG_GREEN, BG_BLACK);
-
-    // Place cursor right after the "> " prompt (position 2,1)
-    set_cursor_position(1, 1);
-
-    // Halt forever
-    for (;;) { 
-        __asm__ __volatile__("hlt"); 
+    
+    // Set colors for normal text
+    terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
+    
+    // Add extra line before welcome message
+    terminal.write("\n");
+    
+    // Print welcome message
+    terminal.write("Welcome to RusticOS!\n");
+    terminal.write("Type 'help' for available commands.\n");
+    terminal.write("Root filesystem mounted at '/'\n\n");
+    
+    // Show initial prompt
+    terminal.write("> ");
+    
+    // Main kernel loop
+    while (true) {
+        // Poll keyboard for input
+        poll_keyboard();
+        
+        // Small delay to prevent excessive CPU usage
+        for (volatile int i = 0; i < 10000; i++);
     }
 }
