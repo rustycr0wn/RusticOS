@@ -27,12 +27,11 @@ private:
     
     // Individual command handlers
     void cmd_help();
-    void cmd_mkdir(const char* name);
-    void cmd_ls();
-    void cmd_cd(const char* path);
-    void cmd_pwd();
+    void cmd_makedir(const char* name);
+    void cmd_makefile(const char* name, const char* content);
+    void cmd_chdir(const char* path);
+    void cmd_cwd();
     void cmd_clear();
-    void cmd_echo(const char* text);
     
 public:
     CommandSystem();

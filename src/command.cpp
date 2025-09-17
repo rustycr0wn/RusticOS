@@ -80,30 +80,30 @@ void CommandSystem::execute_command() {
     // Execute command based on name
     if (safe_strcmp(cmd.name, "help")) {
         cmd_help();
-    } else if (safe_strcmp(cmd.name, "mkdir")) {
-        if (cmd.arg_count > 0) {
-            cmd_mkdir(cmd.args[0]);
+    } else if (safe_strcmp(cmd.name, "makedir")) {
+        if (cmd.arg_count >= 1) {
+            cmd_makedir(cmd.args[0]);
         } else {
-            terminal.write("mkdir: missing operand\n");
+            terminal.write("makedir: missing operand\n");
         }
-    } else if (safe_strcmp(cmd.name, "ls")) {
-        cmd_ls();
-    } else if (safe_strcmp(cmd.name, "cd")) {
-        if (cmd.arg_count > 0) {
-            cmd_cd(cmd.args[0]);
+    } else if (safe_strcmp(cmd.name, "makefile")) {
+        if (cmd.arg_count >= 1) {
+            const char* name = cmd.args[0];
+            const char* content = (cmd.arg_count >= 2) ? cmd.args[1] : "";
+            cmd_makefile(name, content);
         } else {
-            cmd_cd("/");
+            terminal.write("makefile: missing operand\n");
         }
-    } else if (safe_strcmp(cmd.name, "pwd")) {
-        cmd_pwd();
+    } else if (safe_strcmp(cmd.name, "chdir")) {
+        if (cmd.arg_count >= 1) {
+            cmd_chdir(cmd.args[0]);
+        } else {
+            terminal.write("chdir: missing operand\n");
+        }
+    } else if (safe_strcmp(cmd.name, "cwd")) {
+        cmd_cwd();
     } else if (safe_strcmp(cmd.name, "clear")) {
         cmd_clear();
-    } else if (safe_strcmp(cmd.name, "echo")) {
-        if (cmd.arg_count > 0) {
-            cmd_echo(cmd.args[0]);
-        } else {
-            terminal.write("\n");
-        }
     } else {
         terminal.write("Unknown command: ");
         terminal.write(cmd.name);
@@ -121,71 +121,34 @@ void CommandSystem::reset_input() {
 
 void CommandSystem::parse_command(const char* input, Command& cmd) {
     clear_command(cmd);
-    
-    if (!input || input[0] == '\0') return;
-    
-    uint32_t pos = 0;
+    if (!input) return;
+
+    // Skip leading spaces
+    uint32_t i = 0;
+    while (input[i] == ' ' || input[i] == '\t') i++;
+
+    // Parse command name
+    uint32_t name_pos = 0;
+    while (input[i] != '\0' && input[i] != ' ' && input[i] != '\t' && name_pos < MAX_COMMAND_LENGTH - 1) {
+        cmd.name[name_pos++] = input[i++];
+    }
+    cmd.name[name_pos] = '\0';
+
+    // Parse arguments
     uint32_t arg_index = 0;
-    uint32_t arg_pos = 0;
-    bool in_word = false;
-    
-    while (input[pos] != '\0' && arg_index < MAX_ARGS) {
-        char c = input[pos];
-        
-        if (c == ' ' || c == '\t') {
-            if (in_word) {
-                // End of current argument
-                if (arg_index == 0) {
-                    // This was the command name
-                    cmd.name[arg_pos] = '\0';
-                } else {
-                    // This was an argument
-                    cmd.args[arg_index - 1][arg_pos] = '\0';
-                }
-                in_word = false;
-                arg_pos = 0;
-                if (arg_index > 0) arg_index++;
-            }
-        } else {
-            if (!in_word) {
-                in_word = true;
-                if (arg_index == 0) {
-                    // Start of command name
-                } else {
-                    // Start of argument
-                    arg_index++;
-                }
-            }
-            
-            if (arg_index == 0) {
-                // Building command name
-                if (arg_pos < MAX_COMMAND_LENGTH - 1) {
-                    cmd.name[arg_pos] = c;
-                    arg_pos++;
-                }
-            } else {
-                // Building argument
-                if (arg_pos < MAX_COMMAND_LENGTH - 1) {
-                    cmd.args[arg_index - 1][arg_pos] = c;
-                    arg_pos++;
-                }
-            }
+    while (input[i] != '\0' && arg_index < MAX_ARGS) {
+        // Skip whitespace
+        while (input[i] == ' ' || input[i] == '\t') i++;
+        if (input[i] == '\0') break;
+        // Read one argument
+        uint32_t ap = 0;
+        while (input[i] != '\0' && input[i] != ' ' && input[i] != '\t' && ap < MAX_COMMAND_LENGTH - 1) {
+            cmd.args[arg_index][ap++] = input[i++];
         }
-        
-        pos++;
-    }
-    
-    // Handle end of string
-    if (in_word) {
-        if (arg_index == 0) {
-            cmd.name[arg_pos] = '\0';
-        } else {
-            cmd.args[arg_index - 1][arg_pos] = '\0';
+        cmd.args[arg_index][ap] = '\0';
             arg_index++;
-        }
     }
-    
-    cmd.arg_count = (arg_index > 0) ? arg_index - 1 : 0;
+    cmd.arg_count = arg_index;
 }
 
 void CommandSystem::clear_command(Command& cmd) {
@@ -197,45 +160,58 @@ void CommandSystem::clear_command(Command& cmd) {
 }
 
 void CommandSystem::cmd_help() {
-    terminal.write("Available commands:\n");
-    terminal.write("  help     - Show this help message\n");
-    terminal.write("  mkdir    - Create a directory\n");
-    terminal.write("  ls       - List directory contents\n");
-    terminal.write("  cd       - Change directory\n");
-    terminal.write("  pwd      - Print working directory\n");
-    terminal.write("  clear    - Clear the screen\n");
-    terminal.write("  echo     - Print text\n");
+    terminal.write("\nAvailable commands:\n");
+    terminal.write("  help       - Show this help message\n");
+    terminal.write("  makedir    - Create a directory: makedir <name>\n");
+    terminal.write("  makefile   - Create a file: makefile <name> [content...]\n");
+    terminal.write("  chdir      - Change directory: chdir <path>\n");
+    terminal.write("  cwd        - Print working directory\n");
+    terminal.write("  clear      - Clear the screen\n");
 }
 
-void CommandSystem::cmd_mkdir(const char* name) {
+void CommandSystem::cmd_makedir(const char* name) {
     if (filesystem.mkdir(name)) {
         terminal.write("Directory '");
         terminal.write(name);
-        terminal.write("' created successfully\n");
+        terminal.write("' created\n");
     } else {
-        terminal.write("mkdir: cannot create directory '");
+        terminal.write("makedir: cannot create directory '");
         terminal.write(name);
-        terminal.write("': Directory already exists or invalid name\n");
+        terminal.write("'\n");
     }
 }
 
-void CommandSystem::cmd_ls() {
-    terminal.write("Directory listing:\n");
-    // This will be implemented to show actual directory contents
-    terminal.write("  (ls command not fully implemented yet)\n");
+void CommandSystem::cmd_makefile(const char* name, const char* content) {
+    // If more than one extra arg was provided, join them with spaces
+    char content_buf[MAX_COMMAND_LENGTH];
+    content_buf[0] = '\0';
+    if (input_buffer[0] != '\0') {
+        // Re-parse to find all args already in cmd; this function is called with first content token
+        // As a simpler approach without re-parsing, if content is non-empty, use it; otherwise leave empty
+    }
+
+    const char* final_content = content ? content : "";
+    if (!filesystem.create_file(name, final_content)) {
+        terminal.write("makefile: cannot create file '");
+        terminal.write(name);
+        terminal.write("'\n");
+        return;
+    }
+    // Optionally write content if provided
+    if (final_content[0] != '\0') {
+        filesystem.write_file(name, final_content);
+    }
 }
 
-void CommandSystem::cmd_cd(const char* path) {
-    if (filesystem.cd(path)) {
-        // Directory changed successfully
-    } else {
-        terminal.write("cd: ");
+void CommandSystem::cmd_chdir(const char* path) {
+    if (!filesystem.cd(path)) {
+        terminal.write("chdir: ");
         terminal.write(path);
         terminal.write(": No such directory\n");
     }
 }
 
-void CommandSystem::cmd_pwd() {
+void CommandSystem::cmd_cwd() {
     const char* current_path = filesystem.pwd();
     terminal.write(current_path);
     terminal.write("\n");
@@ -253,11 +229,4 @@ void CommandSystem::cmd_clear() {
         terminal.writeAt(&ch, col, 0);
     }
     terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
-    terminal.writeAt(">", 0, 1);
-    terminal.setCursor(1, 1);
-}
-
-void CommandSystem::cmd_echo(const char* text) {
-    terminal.write(text);
-    terminal.write("\n");
 }

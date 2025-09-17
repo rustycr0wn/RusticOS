@@ -23,6 +23,7 @@ struct FileNode {
     uint32_t child_count;
     uint32_t size;
     char* data; // For files, this contains the file data
+    uint32_t data_capacity; // capacity in bytes of data buffer
 };
 
 // File system class
@@ -31,6 +32,10 @@ private:
     FileNode* root;
     FileNode* current_directory;
     
+    // Persistence helpers
+    void save_to_disk();
+    bool load_from_disk();
+
     // Helper functions
     FileNode* find_child(FileNode* parent, const char* name);
     void free_node(FileNode* node);

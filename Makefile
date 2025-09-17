@@ -76,14 +76,17 @@ $(BUILD_DIR)/keyboard.o: $(SRC_DIR)/keyboard.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $< -o $@
 $(BUILD_DIR)/terminal.o: $(SRC_DIR)/terminal.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $< -o $@
+$(BUILD_DIR)/virtual_disk.o: $(SRC_DIR)/virtual_disk.cpp | $(BUILD_DIR)
+	$(CXX) -c $(CXXFLAGS) $< -o $@
 $(BUILD_DIR)/filesystem.o: $(SRC_DIR)/filesystem.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $< -o $@
 $(BUILD_DIR)/command.o: $(SRC_DIR)/command.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $< -o $@
 
+
 # 4. Link kernel ELF (entry at 0x100000)
-$(KERNEL_ELF): $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/filesystem.o $(BUILD_DIR)/command.o linker.ld | $(OUT_DIR)
-	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/filesystem.o $(BUILD_DIR)/command.o
+$(KERNEL_ELF): $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/filesystem.o $(BUILD_DIR)/command.o $(BUILD_DIR)/virtual_disk.o linker.ld | $(OUT_DIR)
+	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/filesystem.o $(BUILD_DIR)/command.o $(BUILD_DIR)/virtual_disk.o
 
 # 5. Convert kernel ELF to raw binary for disk image
 $(KERNEL_BIN): $(KERNEL_ELF) | $(OUT_DIR)

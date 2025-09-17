@@ -5,6 +5,9 @@
 #include "filesystem.h"
 #include "command.h"
 
+// Track prompt start position to protect it from backspace
+static uint16_t prompt_start_x = 0;
+static uint16_t prompt_start_y = 0;
 // Simple keyboard input polling (since we don't have interrupts set up yet)
 static inline uint8_t inb(uint16_t port) {
     uint8_t result;
@@ -26,7 +29,7 @@ bool poll_keyboard() {
     uint8_t scan_code = inb(0x60);
     
     // Handle key press/release
-    bool key_released = (scan_code & 0x80) != 0;
+    bool key_released = (scan_code & 0x80) != 0; // 
     uint8_t key_code = scan_code & 0x7F;
     
     if (key_released) {
@@ -81,16 +84,27 @@ bool poll_keyboard() {
     if (ascii != 0) {
         // Process the character
         if (ascii == '\n') {
-            // Execute command
+            // Mark input as complete and execute command
+            command_system.process_input('\n');
             command_system.execute_command();
-            // Show new prompt
-            terminal.write("> ");
+            // Move to new line and show new prompt
+            terminal.write("\n> ");
+            // Record prompt start position (protect from backspace)
+            prompt_start_x = terminal.getCursorX();
+            prompt_start_y = terminal.getCursorY();
         } else if (ascii == '\b') {
-            // Handle backspace
+            // Handle backspace: update input buffer and visually erase last char without printing '\b'
             command_system.process_input(ascii);
-            terminal.putChar('\b');
-            terminal.putChar(' ');
-            terminal.putChar('\b');
+            // Visually erase one character if we're not at column 0
+            uint16_t curX = terminal.getCursorX();
+            uint16_t curY = terminal.getCursorY();
+            // Prevent deleting the prompt ("> ") by limiting how far back we can go
+            bool can_delete = (curY > prompt_start_y) || (curY == prompt_start_y && curX > prompt_start_x);
+            if (can_delete && curX > 0) {
+                terminal.setCursor(curX - 1, curY);
+                terminal.putChar(' ');
+                terminal.setCursor(curX - 1, curY);
+            }
         } else {
             // Regular character
             command_system.process_input(ascii);
@@ -120,7 +134,7 @@ extern "C" void kernel_main() {
     terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
     
     // Add extra line before welcome message
-    terminal.write("\n");
+    terminal.write("\n\n");
     
     // Print welcome message
     terminal.write("Welcome to RusticOS!\n");
@@ -129,6 +143,8 @@ extern "C" void kernel_main() {
     
     // Show initial prompt
     terminal.write("> ");
+    prompt_start_x = terminal.getCursorX();
+    prompt_start_y = terminal.getCursorY();
     
     // Main kernel loop
     while (true) {
