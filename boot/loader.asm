@@ -1,183 +1,92 @@
-[org 0x0000]
+[org 0x8000]
 [bits 16]
 
 %ifndef KERNEL_SECTORS
 %ifdef KERNEL_SIZE_BYTES
-    %assign KERNEL_SECTORS ((KERNEL_SIZE_BYTES + 511) / 512)
+%assign KERNEL_SECTORS ((KERNEL_SIZE_BYTES + 511) / 512)
 %else
-    %error "KERNEL_SIZE_BYTES must be defined by the build system!"
+%error "KERNEL_SIZE_BYTES must be defined by the build system!"
 %endif
 %endif
 
 %ifndef LOADER_SECTORS
-    %define LOADER_SECTORS 1
+%define LOADER_SECTORS 2
 %endif
 
-kernel_sectors      equ KERNEL_SECTORS
-SEG_BASE            equ 0x1000
-KERNEL_LBA_START    equ (1 + LOADER_SECTORS)
-PART_BASE_PTR       equ 0x0600
+kernel_sectors equ KERNEL_SECTORS
+SEG_BASE equ 0x1000
+; Updated: MBR at LBA 0, Loader at LBA 1, so kernel starts at LBA (1 + LOADER_SECTORS)
+KERNEL_LBA_START equ (1 + LOADER_SECTORS)
+PART_BASE_PTR equ 0x0600
 
-; Code starts immediately
 loader_start:
     cli
-    push cs
-    pop ds
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     mov ax, 0x9000
-    mov ss, ax 
+    mov ss, ax
     mov sp, 0xFFFE
     cld
-    mov [boot_drive], dl
-    mov byte [dl_tried_alt], 0
 
-    ; Stage: loader start
+    ; Early print to confirm loader entry
+    mov ah, 0x0e
+    mov al, 'L'
+    int 0x10
+
+    ; Ensure DS/ES match CS so data labels are correct regardless of load seg
+    push cs
+    pop ds
+    push ds
+    pop es
+
+    ; Capture boot drive
+    mov [boot_drive], dl
+
     mov si, msg_ld_start
     call bios_print
-    call delay_500ms
 
-    ; Read kernel from disk using INT 13h Extensions (EDD, AH=0x42) one sector at a time
+    ; Prepare DAP to load kernel to 0x20000 (buf_seg=0x2000, buf_off=0)
+    mov si, dap
+    mov byte [si], 0x10
+    mov byte [si+1], 0x00
+    mov word [si+2], kernel_sectors
+    mov word [si+4], 0x0000     ; buf_off
+    mov word [si+6], 0x2000     ; buf_seg
+    mov dword [si+8], KERNEL_LBA_START
+    mov dword [si+12], 0
+
     mov si, msg_ld_edd
     call bios_print
-    call delay_500ms
 
-    ; Load partition base LBA (qword at 0:PART_BASE_PTR) into edx:eax
-    xor ax, ax
-    mov es, ax
-    mov di, PART_BASE_PTR
-    ; read low dword
-    mov bx, [es:di]
-    mov cx, [es:di+2]
-    mov eax, ebx
-    and eax, 0x0000FFFF
-    shl ecx, 16
-    or eax, ecx
-    ; high dword assumed zero
-    xor edx, edx
-
-    mov word [count], 1
-    mov word [buf_off], 0x0000
-    mov word [buf_seg], 0x2000
-    ; base LBA for kernel = partition_base + KERNEL_LBA_START
-    mov dword [lba_low], KERNEL_LBA_START
-    add dword [lba_low], eax
-    adc dword [lba_high], edx
-    mov cx, kernel_sectors
-.read_lba_loop:
-    cmp cx, 0
-    je .read_done
-    ; Setup DAP fields before each read
-    mov ax, [count]
-    mov [dap+2], ax
-    mov ax, [buf_off]
-    mov [dap+4], ax
-    mov ax, [buf_seg]
-    mov [dap+6], ax
-    mov eax, [lba_low]
-    mov [dap+8], eax
-    mov eax, [lba_high]
-    mov [dap+12], eax
-    mov si, dap                    ; DS:SI -> DAP
-    mov byte [retry], 3
-.try_read:
     mov dl, [boot_drive]
-    mov ah, 0x42                   ; EDD extended read
+    mov bx, dap
+    mov si, bx
+    mov ah, 0x42
     int 0x13
-    jnc .ok
-    mov [last_status], ah          ; capture status
-    ; toggle DL to 0x80 once if not tried
-    cmp byte [dl_tried_alt], 0
-    jne .after_toggle
-    mov dl, 0x80
-    mov [boot_drive], dl
-    mov byte [dl_tried_alt], 1
-.after_toggle:
-    ; reset and retry
-    xor ah, ah
-    int 0x13
-    dec byte [retry]
-    jnz .try_read
-    jmp .chs_fallback              ; if EDD fails entirely, use CHS
-.ok:
-    ; advance buffer and LBA
-    mov ax, [buf_seg]
-    add ax, 0x20                   ; 512 bytes = 32 paragraphs
-    mov [buf_seg], ax
-    add dword [lba_low], 1
-    adc dword [lba_high], 0
-    dec cx
-    jmp .read_lba_loop
+    jnc .edd_ok
 
-.chs_fallback:
-    mov si, msg_ld_chs
-    call bios_print
-    call delay_500ms
-
-    ; CHS fallback: C=0,H=0,S starts at 3 (MBR=1, loader=2), read cx sectors
-    mov ax, [buf_seg]
-    mov es, ax
-    xor bx, bx
-    mov byte [retry], 3
-    mov dl, [boot_drive]
-    xor ch, ch
-    xor dh, dh
-    mov si, cx                    ; remaining sectors
-    mov cl, 3                     ; start at sector 3
-.chs_loop:
-    cmp si, 0
-    je .chs_done
-.chs_try:
-    mov ah, 0x02
-    mov al, 1
-    mov dl, [boot_drive]
-    int 0x13
-    jnc .chs_ok
     mov [last_status], ah
-    xor ah, ah
-    int 0x13
-    dec byte [retry]
-    jnz .chs_try
     jmp disk_error
-.chs_ok:
-    add bx, 512
-    inc cl
-    dec si
-    jmp .chs_loop
-.chs_done:
-    mov ax, es
-    mov [buf_seg], ax
-    xor cx, cx
 
-.read_done:
+.edd_ok:
     mov si, msg_ld_done
     call bios_print
-    call delay_500ms
 
     ; Setup GDT
-    mov si, msg_ld_gdt
-    call bios_print
-    call delay_500ms
     lgdt [gdt_descriptor]
 
     ; Enable A20
-    mov si, msg_ld_a20
-    call bios_print
-    call delay_500ms
     in al, 0x92
     or al, 0x02
     out 0x92, al
 
     ; Enter protected mode
-    mov si, msg_ld_pm
-    call bios_print
-    call delay_500ms
-    call delay_500ms
     cli
     mov eax, cr0
     or eax, 1
     mov cr0, eax
-    ; Far jump to physical address of protected_mode_entry
-    %define PM_ENTRY_PHYS (protected_mode_entry + (SEG_BASE << 4))
-    jmp dword 0x08:PM_ENTRY_PHYS
+    jmp dword 0x08:protected_mode_entry
 
 [bits 32]
 protected_mode_entry:
@@ -188,15 +97,15 @@ protected_mode_entry:
     mov gs, ax
     mov ss, ax
     mov esp, 0x0090000
-    ; Copy kernel
+
+    ; Copy kernel to 0x100000
     mov esi, 0x00020000
     mov edi, 0x100000
-    mov ecx, ((KERNEL_SIZE_BYTES + 3) / 4)
+    mov ecx, (KERNEL_SIZE_BYTES + 3) / 4
     cld
     rep movsd
-    jmp dword 0x08:0x100000
 
-[bits 16]
+    jmp dword 0x08:0x100000
 
 ; --- Hex helpers and delay ---
 hex_digits: db '0123456789ABCDEF'
@@ -244,6 +153,7 @@ disk_error:
     mov al, ':'
     mov ah, 0x04
     stosw
+
     mov al, [last_status]
     ; print two hex digits
     push ax
@@ -260,30 +170,31 @@ disk_error:
     xlat
     mov ah, 0x04
     stosw
+
     cli
 .halt:
     hlt
     jmp .halt
 
-; Data
-boot_drive    db 0
-retry         db 0
-last_status   db 0
-dl_tried_alt  db 0
+; --- Data ---
+boot_drive db 0
+retry db 0
+last_status db 0
+dl_tried_alt db 0
 
-; GDT
+; --- GDT ---
 align 8
 gdt_start:
-    dq 0x0000000000000000
-    dq 0x00CF9A000000FFFF
-    dq 0x00CF92000000FFFF
+    dq 0x0000000000000000       ; null descriptor
+    dq 0x00CF9A000000FFFF       ; code descriptor
+    dq 0x00CF92000000FFFF       ; data descriptor
 gdt_end:
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
-    dd (gdt_start + (SEG_BASE << 4))
+    dd gdt_start
 
-; DAP
+; --- DAP (Disk Address Packet) ---
 dap:
     db 0x10
     db 0x00
@@ -293,6 +204,7 @@ buf_seg:    dw 0
 lba_low:    dd 0
 lba_high:   dd 0
 
+; --- Messages ---
 msg_ld_start db "[LOADER] start", 13,10,0
 msg_ld_edd   db "[LOADER] EDD read", 13,10,0
 msg_ld_chs   db "[LOADER] CHS read", 13,10,0
@@ -302,6 +214,7 @@ msg_ld_a20   db "[LOADER] enable A20", 13,10,0
 msg_ld_pm    db "[LOADER] enter PM", 13,10,0
 msg_ld_copy  db "[LOADER] copy kernel", 13,10,0
 
+; Pad to sector boundary
 %if ($-$$) < 510
     times 510-($-$$) db 0
     dw 0xaa55

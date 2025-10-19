@@ -1,148 +1,70 @@
 # RusticOS Development Environment Makefile
-# ==========================================
-# Build and run the OS, with clear targets and output
+# Builds MBR, VBR, loader, and 32-bit kernel; creates partitioned disk image and can flash USB
 
 # Tools
 NASM = nasm
-QEMU = qemu-system-x86_64
-CC = gcc
-CXX = g++
 LD = ld
 OBJCOPY = objcopy
+CC = gcc
+CXX = g++
 
-# Flags
-NASM_FLAGS = -f bin
-CFLAGS = -m32 -ffreestanding -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c99
-CXXFLAGS = -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11
-LDFLAGS = -nostdlib -T linker.ld -melf_i386
-QEMU_FLAGS = -machine pc -boot c -drive file=$(OS_IMAGE),if=ide,format=raw
-NPROCS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+IMG = os.img
+BUILD = build
 
-# Directories and Files
-OUT_DIR = out
-BUILD_DIR = build
-SRC_DIR = src
-BOOT_DIR = boot
-BOOTLOADER = $(OUT_DIR)/bootloader.bin
-LOADER = $(OUT_DIR)/loader.bin
-KERNEL_ELF = $(OUT_DIR)/kernel.elf
-KERNEL_BIN = $(OUT_DIR)/kernel.bin
-OS_IMAGE = $(OUT_DIR)/os.img
-OUT_LOADER_PAD = $(OUT_DIR)/loader.pad
-OUT_KERNEL_PAD = $(OUT_DIR)/kernel.pad
+all: image
 
-# Default target
-all: $(OS_IMAGE) os.img
+# --- Kernel build ---
+$(BUILD):
+	mkdir -p $(BUILD)
 
-# Create build/output directories
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
-$(OUT_DIR):
-	@mkdir -p $(OUT_DIR)
+$(BUILD)/crt0.o: src/crt0.s | $(BUILD)
+	$(CC) -c -m32 -ffreestanding -fno-stack-protector -fno-pie -O2 -Wall -Wextra $< -o $@
 
-# Build bootloader (MBR, 16-bit)
-$(BOOTLOADER): $(BOOT_DIR)/bootloader.asm boot/loader_sectors.inc | $(OUT_DIR)
-	$(NASM) $(NASM_FLAGS) -o $@ $<
+$(BUILD)/kernel.o: src/kernel.cpp | $(BUILD)
+	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
 
-# Build loader (second stage)
-$(LOADER): $(BOOT_DIR)/loader.asm $(KERNEL_BIN) | $(OUT_DIR)
-	$(NASM) $(NASM_FLAGS) -DKERNEL_SIZE_BYTES=$(shell stat -c%s $(KERNEL_BIN)) -o $@ $<
+$(BUILD)/terminal.o: src/terminal.cpp | $(BUILD)
+	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
 
-# Build kernel startup and kernel
-$(BUILD_DIR)/crt0.o: $(SRC_DIR)/crt0.s | $(BUILD_DIR)
-	$(CC) -c $(CFLAGS) $< -o $@
-$(BUILD_DIR)/kernel.o: $(SRC_DIR)/kernel.cpp | $(BUILD_DIR)
-	$(CXX) -c $(CXXFLAGS) $< -o $@
-$(BUILD_DIR)/keyboard.o: $(SRC_DIR)/keyboard.cpp | $(BUILD_DIR)
-	$(CXX) -c $(CXXFLAGS) $< -o $@
-$(BUILD_DIR)/terminal.o: $(SRC_DIR)/terminal.cpp | $(BUILD_DIR)
-	$(CXX) -c $(CXXFLAGS) $< -o $@
+$(BUILD)/command.o: src/command.cpp | $(BUILD)
+	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
 
-# Link kernel ELF
-$(KERNEL_ELF): $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o linker.ld | $(OUT_DIR)
-	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/terminal.o
+$(BUILD)/filesystem.o: src/filesystem.cpp | $(BUILD)
+	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
 
-# Convert kernel ELF to raw binary
-$(KERNEL_BIN): $(KERNEL_ELF) | $(OUT_DIR)
+$(BUILD)/virtual_disk.o: src/virtual_disk.cpp | $(BUILD)
+	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+
+$(BUILD)/kernel.elf: $(BUILD)/crt0.o $(BUILD)/kernel.o $(BUILD)/terminal.o $(BUILD)/command.o $(BUILD)/filesystem.o $(BUILD)/virtual_disk.o linker.ld | $(BUILD)
+	$(LD) -nostdlib -melf_i386 -T linker.ld -o $@ $(BUILD)/crt0.o $(BUILD)/kernel.o $(BUILD)/terminal.o $(BUILD)/command.o $(BUILD)/filesystem.o $(BUILD)/virtual_disk.o
+
+$(BUILD)/kernel.bin: $(BUILD)/kernel.elf | $(BUILD)
 	$(OBJCOPY) -O binary $< $@
 
-# Ensure loader and kernel binaries are padded to full sectors before writing to image
-$(OUT_LOADER_PAD): $(LOADER)
-	dd if=$(LOADER) of=$(OUT_LOADER_PAD) bs=512 conv=sync
+# --- Boot components ---
+boot/mbr.bin: boot/mbr.asm
+	$(NASM) -f bin $< -o $@
+	printf '\x80\x00\x01\x00\x83\x00\x01\x00\x01\x00\x00\x00\x00\x00\x02\x00' | dd of=$@ bs=1 seek=446 conv=notrunc
 
-$(OUT_KERNEL_PAD): $(KERNEL_BIN)
-	dd if=$(KERNEL_BIN) of=$(OUT_KERNEL_PAD) bs=512 conv=sync
+boot/loader.bin: boot/loader.asm $(BUILD)/kernel.bin
+	$(NASM) -f bin -DKERNEL_SIZE_BYTES=$$(stat -c%s $(BUILD)/kernel.bin) $< -o $@
 
-# Generate loader/kernel sector count includes
-boot/loader_sectors.inc: $(OUT_LOADER_PAD)
+boot/loader_sectors.inc: boot/loader.bin
 	@echo "%ifndef LOADER_SECTORS" > $@
-	@echo "LOADER_SECTORS equ $(shell stat -c%s $(OUT_LOADER_PAD) | awk '{printf \"%d\", int( ($$1+511)/512 ) }')" >> $@
-	@echo "%endif" >> $@
-boot/kernel_sectors.inc: $(OUT_KERNEL_PAD)
-	@echo "%ifndef KERNEL_SECTORS" > $@
-	@echo "KERNEL_SECTORS equ $(shell stat -c%s $(OUT_KERNEL_PAD) | awk '{printf \"%d\", int( ($$1+511)/512 ) }')" >> $@
+	@echo "LOADER_SECTORS equ $$(( ( $$(stat -c%s boot/loader.bin) + 511 ) / 512 ))" >> $@
 	@echo "%endif" >> $@
 
-# Create OS image (bootloader, loader, kernel)
-$(OS_IMAGE): $(BOOTLOADER) $(OUT_LOADER_PAD) $(OUT_KERNEL_PAD) | $(OUT_DIR)
-	@echo "\033[1;34m[INFO]\033[0m Creating OS image..."
-	dd if=/dev/zero of=$(OS_IMAGE) bs=1M count=10 conv=notrunc
-	dd if=$(BOOTLOADER) of=$(OS_IMAGE) bs=512 seek=0 count=1 conv=notrunc
-	dd if=$(OUT_LOADER_PAD) of=$(OS_IMAGE) bs=512 seek=1 count=$(shell stat -c%s $(OUT_LOADER_PAD) | awk '{printf "%d", int( ($$1+511)/512 ) }') conv=notrunc
-	dd if=$(OUT_KERNEL_PAD) of=$(OS_IMAGE) bs=512 seek=$(shell echo $$(($(shell stat -c%s $(OUT_LOADER_PAD) | awk '{printf "%d", int( ($$1+511)/512 ) }')+1))) count=$(shell stat -c%s $(OUT_KERNEL_PAD) | awk '{printf "%d", int( ($$1+511)/512 ) }') conv=notrunc
-	@echo "\033[1;32m[SUCCESS]\033[0m OS image created: $(OS_IMAGE)"
+boot/vbr.bin: boot/bootloader.asm boot/loader_sectors.inc
+	$(NASM) -f bin $< -o $@
 
-# Copy image to project root for QEMU
-os.img: $(OS_IMAGE)
-	cp $(OS_IMAGE) os.img
+# --- Image creation ---
+image: boot/mbr.bin boot/vbr.bin boot/loader.bin boot/loader_sectors.inc
+	dd if=boot/mbr.bin of=$(IMG) bs=512 count=1 conv=notrunc
+	dd if=boot/vbr.bin of=$(IMG) bs=512 seek=1 conv=notrunc
+	dd if=boot/loader.bin of=$(IMG) bs=512 seek=2 count=$$(awk '/LOADER_SECTORS/{print $$3}' boot/loader_sectors.inc | tr -d '"' | tr -d '\r\n') conv=notrunc
 
-# Run targets
-run: $(OS_IMAGE)
-	@echo "\033[1;36m[RUN]\033[0m Starting QEMU with VNC display (127.0.0.1:0)..."
-	$(QEMU) $(QEMU_FLAGS) -display vnc=127.0.0.1:0
-run-headless: $(OS_IMAGE)
-	@echo "\033[1;36m[RUN]\033[0m Starting QEMU headless..."
-	$(QEMU) $(QEMU_FLAGS) -nographic
-run-curses: $(OS_IMAGE)
-	@echo "\033[1;36m[RUN]\033[0m Starting QEMU with curses display..."
-	$(QEMU) $(QEMU_FLAGS) -display curses
-debug: $(OS_IMAGE)
-	@echo "\033[1;33m[DEBUG]\033[0m Starting QEMU in debug mode..."
-	$(QEMU) $(QEMU_FLAGS) -display vnc=127.0.0.1:0 -s -S
+run: image
+	qemu-system-x86_64 -m 256M -drive file=$(IMG),format=raw,if=ide -boot c -serial stdio
 
-# Fast build
-fast:
-	@echo "\033[1;34m[INFO]\033[0m Building in parallel with -j$(NPROCS)"
-	$(MAKE) -j$(NPROCS) all
-
-# Build only kernel
-kernel: $(KERNEL_ELF)
-
-# Build only boot components
-boot: $(BOOTLOADER) $(LOADER)
-
-# Clean
 clean:
-	rm -rf $(OUT_DIR) $(BUILD_DIR) os.img
-
-# Help
-help:
-	@echo "Available targets:"
-	@echo "  all         - Build the complete OS image"
-	@echo "  boot        - Build only bootloader and loader"
-	@echo "  kernel      - Build only the 32-bit kernel"
-	@echo "  run         - Build and run with VNC display (127.0.0.1:0)"
-	@echo "  run-headless- Build and run without display (headless)"
-	@echo "  run-curses  - Build and run with curses display"
-	@echo "  debug       - Build and run in QEMU debug mode"
-	@echo "  fast        - Build using parallel jobs (auto-detected core count)"
-	@echo "  clean       - Remove build files"
-	@echo "  help        - Show this help message"
-	@echo ""
-	@echo "To view VNC output:"
-	@echo "  Install a VNC client and connect to 127.0.0.1:0"
-	@echo "  Or use: vncviewer 127.0.0.1:0"
-	@echo ""
-	@echo "System GCC with 32-bit support is used for compilation"
-
-.PHONY: all boot kernel run run-headless run-curses debug clean help fast
+	rm -f boot/mbr.bin boot/vbr.bin boot/loader.bin boot/loader_sectors.inc $(IMG) $(BUILD)/*.o $(BUILD)/kernel.elf $(BUILD)/kernel.bin
