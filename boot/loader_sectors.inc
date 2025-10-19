@@ -1,3 +1,0 @@
-%ifndef LOADER_SECTORS
-LOADER_SECTORS equ 2
-%endif

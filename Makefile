@@ -1,70 +1,61 @@
-# RusticOS Development Environment Makefile
-# Builds MBR, VBR, loader, and 32-bit kernel; creates partitioned disk image and can flash USB
+# Makefile for rusticOSboot with bootloader.asm and loader.asm
 
-# Tools
+# Assembler and tools
 NASM = nasm
-LD = ld
-OBJCOPY = objcopy
-CC = gcc
-CXX = g++
+DD = dd
+QEMU = qemu-system-x86_64
 
-IMG = os.img
-BUILD = build
+# Directories
+BOOT_DIR = boot
+BUILD_DIR = build
 
-all: image
+# Source files
+BOOTLOADER_SRC = $(BOOT_DIR)/bootloader.asm
+LOADER_SRC = $(BOOT_DIR)/loader.asm
 
-# --- Kernel build ---
-$(BUILD):
-	mkdir -p $(BUILD)
+# Output files
+BOOTLOADER_BIN = $(BUILD_DIR)/bootloader.bin
+LOADER_BIN = $(BUILD_DIR)/loader.bin
+DISK_IMG = $(BUILD_DIR)/disk.img
 
-$(BUILD)/crt0.o: src/crt0.s | $(BUILD)
-	$(CC) -c -m32 -ffreestanding -fno-stack-protector -fno-pie -O2 -Wall -Wextra $< -o $@
+# Kernel settings (you'll need to adjust these based on your kernel)
+KERNEL_SIZE_BYTES ?= 32768
+LOADER_SECTORS = 2
 
-$(BUILD)/kernel.o: src/kernel.cpp | $(BUILD)
-	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+# Create build directory
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-$(BUILD)/terminal.o: src/terminal.cpp | $(BUILD)
-	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+# Build bootloader (MBR)
+$(BOOTLOADER_BIN): $(BOOTLOADER_SRC) | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $< -DKERNEL_SIZE_BYTES=$(KERNEL_SIZE_BYTES)
 
-$(BUILD)/command.o: src/command.cpp | $(BUILD)
-	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+# Build loader
+$(LOADER_BIN): $(LOADER_SRC) | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $< -DKERNEL_SIZE_BYTES=$(KERNEL_SIZE_BYTES)
 
-$(BUILD)/filesystem.o: src/filesystem.cpp | $(BUILD)
-	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+# Create disk image
+$(DISK_IMG): $(BOOTLOADER_BIN) $(LOADER_BIN) | $(BUILD_DIR)
+	# Create 1MB disk image
+	$(DD) if=/dev/zero of=$@ bs=1024 count=1024
+	# Write MBR (bootloader) to sector 0
+	$(DD) if=$(BOOTLOADER_BIN) of=$@ bs=512 count=1 conv=notrunc
+	# Write loader starting at sector 1
+	$(DD) if=$(LOADER_BIN) of=$@ bs=512 seek=1 conv=notrunc
 
-$(BUILD)/virtual_disk.o: src/virtual_disk.cpp | $(BUILD)
-	$(CXX) -c -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pie -O2 -Wall -Wextra -std=c++11 $< -o $@
+# Build everything
+all: $(DISK_IMG)
 
-$(BUILD)/kernel.elf: $(BUILD)/crt0.o $(BUILD)/kernel.o $(BUILD)/terminal.o $(BUILD)/command.o $(BUILD)/filesystem.o $(BUILD)/virtual_disk.o linker.ld | $(BUILD)
-	$(LD) -nostdlib -melf_i386 -T linker.ld -o $@ $(BUILD)/crt0.o $(BUILD)/kernel.o $(BUILD)/terminal.o $(BUILD)/command.o $(BUILD)/filesystem.o $(BUILD)/virtual_disk.o
-
-$(BUILD)/kernel.bin: $(BUILD)/kernel.elf | $(BUILD)
-	$(OBJCOPY) -O binary $< $@
-
-# --- Boot components ---
-boot/mbr.bin: boot/mbr.asm
-	$(NASM) -f bin $< -o $@
-	printf '\x80\x00\x01\x00\x83\x00\x01\x00\x01\x00\x00\x00\x00\x00\x02\x00' | dd of=$@ bs=1 seek=446 conv=notrunc
-
-boot/loader.bin: boot/loader.asm $(BUILD)/kernel.bin
-	$(NASM) -f bin -DKERNEL_SIZE_BYTES=$$(stat -c%s $(BUILD)/kernel.bin) $< -o $@
-
-boot/loader_sectors.inc: boot/loader.bin
-	@echo "%ifndef LOADER_SECTORS" > $@
-	@echo "LOADER_SECTORS equ $$(( ( $$(stat -c%s boot/loader.bin) + 511 ) / 512 ))" >> $@
-	@echo "%endif" >> $@
-
-boot/vbr.bin: boot/bootloader.asm boot/loader_sectors.inc
-	$(NASM) -f bin $< -o $@
-
-# --- Image creation ---
-image: boot/mbr.bin boot/vbr.bin boot/loader.bin boot/loader_sectors.inc
-	dd if=boot/mbr.bin of=$(IMG) bs=512 count=1 conv=notrunc
-	dd if=boot/vbr.bin of=$(IMG) bs=512 seek=1 conv=notrunc
-	dd if=boot/loader.bin of=$(IMG) bs=512 seek=2 count=$$(awk '/LOADER_SECTORS/{print $$3}' boot/loader_sectors.inc | tr -d '"' | tr -d '\r\n') conv=notrunc
-
-run: image
-	qemu-system-x86_64 -m 256M -drive file=$(IMG),format=raw,if=ide -boot c -serial stdio
-
+# Clean build files
 clean:
-	rm -f boot/mbr.bin boot/vbr.bin boot/loader.bin boot/loader_sectors.inc $(IMG) $(BUILD)/*.o $(BUILD)/kernel.elf $(BUILD)/kernel.bin
+	rm -rf $(BUILD_DIR)
+
+# Run in QEMU
+run: $(DISK_IMG)
+	$(QEMU) -drive format=raw,file=$< -m 512M
+
+# Debug in QEMU
+debug: $(DISK_IMG)
+	$(QEMU) -drive format=raw,file=$< -m 512M -s -S
+
+.PHONY: all clean run debug

@@ -1,7 +1,10 @@
 [org 0x7c00]
 [bits 16]
 
-%include "boot/loader_sectors.inc"
+; Define LOADER_SECTORS directly instead of including file
+%ifndef LOADER_SECTORS
+LOADER_SECTORS equ 2
+%endif
 
 start:
     cli
@@ -20,14 +23,13 @@ start:
     call bios_print
 
     ; Prepare DAP for INT 13h AH=42h (EDD) to load loader from LBA 1 to 0x8000
-    ; Note: LBA 1 instead of 2 since we're now the MBR (no separate MBR taking LBA 0)
     mov si, dap
     mov byte [si], 16
     mov byte [si+1], 0
     mov word [si+2], LOADER_SECTORS
     mov word [si+4], 0x0000
     mov word [si+6], 0x0800
-    mov dword [si+8], 1        ; LBA 1 (was 2 in VBR)
+    mov dword [si+8], 1        ; LBA 1
     mov dword [si+12], 0
 
     mov dl, [boot_drive]
