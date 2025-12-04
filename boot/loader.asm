@@ -1,15 +1,94 @@
 [org 0x0000]
 [bits 16]
 
-; ensure CPU starts at loader_start when MBR does a far jmp 0x1000:0x0000
-jmp loader_start
+loader_start:
+    cli
+    cld
 
-%include "boot/kernel_sectors.inc"
-%ifndef KERNEL_LBA_START
-%assign KERNEL_LBA_START 2
-%endif
+    ; Set up simple real-mode stack and segments
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7000
 
-; ---------------- print_string ----------------
+    ; === Print [LOADER] message via BIOS INT10 ===
+    mov si, loader_msg_start
+    call print_string
+
+    ; === Ultra-early VGA markers (direct writes via ES) ===
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0], 'L'
+    mov byte [es:1], 0x0F
+    mov byte [es:2], '1'
+    mov byte [es:3], 0x0F
+
+    ; === Load GDT descriptor: make DS point to the loader's segment (0x1000) ===
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Put marker
+    mov byte [es:8], '2'
+    mov byte [es:9], 0x0F
+
+    ; Load the GDTR from our gdt_descriptor
+    lgdt [gdt_descriptor]
+
+    ; mark that LGDT executed
+    mov byte [es:16], '3'
+    mov byte [es:17], 0x0F
+
+    ; Print kernel loaded message
+    mov ax, 0x0000
+    mov ds, ax
+    mov si, loader_msg_kernel_loaded
+    call print_string
+
+    ; Enable protected-mode via CR0
+    mov eax, cr0
+    or  eax, 1
+    mov cr0, eax
+
+    ; mark just before far-jump
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:20], '4'
+    mov byte [es:21], 0x0F
+
+    ; === CRITICAL FIX: Calculate correct offset for protected_mode_start ===
+    ; The far-jump offset must be relative to the code segment base (0x1000:0x0000)
+    ; protected_mode_start label is at a fixed offset in our binary
+    ; We pass that offset directly to the far-jump
+    
+    ; Far jump into protected-mode code (EA offset16 selector16)
+    db 0xEA
+    dw (protected_mode_start - loader_start)  ; offset from start of loader
+    dw 0x0008                                  ; code selector
+
+; ============ Protected-mode (32-bit) ============
+[bits 32]
+protected_mode_start:
+    ; Load data segment selectors for protected mode
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; initialize stack in protected mode
+    mov esp, 0x90000
+
+    ; mark in VGA (32-bit absolute video address)
+    mov byte [0xB8000], 'P'
+    mov byte [0xB8001], 0x07
+    mov byte [0xB8002], 'M'
+    mov byte [0xB8003], 0x07
+
+    cli
+    hlt
+
+; ============ Print function (real-mode) ============
+[bits 16]
 print_string:
     mov ah, 0x0E
 .ps_loop:
@@ -21,122 +100,11 @@ print_string:
 .ps_done:
     ret
 
-; ---------------- loader entry ----------------
-loader_start:
-    ; ULTRA-EARLY debug: write 'L' directly at VGA before any other code
-    ; This confirms CPU is executing loader code
-    pushf
-    push ax
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0], 'L'
-    mov byte [es:1], 0x0F      ; bright white
-    pop es
-    pop ax
-    popf
-    
-    cli
-    ; set segment registers (loader loaded at 0x1000:0x0000 by MBR)
-    mov ax, 0x1000
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov sp, 0xFFFF
+; ============ Messages ============
+loader_msg_start: db "[LOADER] Started", 0x0D, 0x0A, 0
+loader_msg_kernel_loaded: db "[LOADER] Kernel loaded", 0x0D, 0x0A, 0
 
-    ; print started
-    mov si, loader_msg_start
-    call print_string
-
-    ; ---------------- load kernel (CHS) ----------------
-    ; Do NOT overwrite DL - BIOS supplied drive in DL
-    mov ah, 0x02              ; INT13 CHS read
-    mov al, KERNEL_SECTORS    ; sectors to read
-    mov ch, 0                 ; cylinder 0
-    mov cl, 2                 ; sector 2 (kernel starts at sector 2)
-    mov dh, 0                 ; head 0
-    ; load to ES:BX = 0x9000:0x0000 (physical 0x00090000)
-    mov ax, 0x9000
-    mov es, ax
-    xor bx, bx
-    int 0x13
-    jc dump_int13_err
-
-    ; print loaded
-    mov si, loader_msg_loaded
-    call print_string
-
-    ; prepare for protected mode
-    cli
-    mov si, loader_msg_pm
-    call print_string
-
-    ; mask PICs
-    mov al, 0xFF
-    out 0x21, al
-    out 0xA1, al
-
-    ; ensure DS points to loader segment (for gdtr/jmp_ptr)
-    mov ax, 0x1000
-    mov ds, ax
-
-    ; load GDT (gdtr base is physical 0x10000 + gdt)
-    lgdt [gdt_descriptor]
-
-    ; enable protected mode
-    mov eax, cr0
-    or  eax, 1
-    mov cr0, eax
-
-    ; far jmp via memory pointer to reload CS
-    jmp far [jmp_ptr]
-
-dump_int13_err:
-    ; AH has BIOS status - display hex and halt
-    push ax
-    mov bl, ah
-
-    ; low nibble -> AL
-    mov al, bl
-    and al, 0x0F
-    cmp al, 10
-    jl L_low_digit
-    add al, 'A' - 10
-    jmp L_low_done
-L_low_digit:
-    add al, '0'
-L_low_done:
-
-    ; high nibble -> BH
-    mov bh, bl
-    shr bh, 4
-    and bh, 0x0F
-    cmp bh, 10
-    jl L_high_digit
-    add bh, 'A' - 10
-    jmp L_high_done
-L_high_digit:
-    add bh, '0'
-L_high_done:
-
-    ; write two chars to VGA text buffer (B800:0)
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    xor di, di
-    mov [es:di], al
-    mov byte [es:di+1], 0x07
-    mov [es:di+2], bh
-    mov byte [es:di+3], 0x07
-    pop es
-
-    pop ax
-.halt_loop:
-    cli
-    hlt
-    jmp .halt_loop
-
-; ---------------- Data ----------------
+; ============ GDT (place at the end of file) ============
 align 8
 gdt:
     dq 0x0000000000000000
@@ -144,35 +112,5 @@ gdt:
     dq 0x00cf92000000ffff
 
 gdt_descriptor:
-    dw (3*8 - 1)
+    dw 23
     dd 0x10000 + gdt
-
-jmp_ptr:
-    dd 0x10000 + protected_mode_start
-    dw 0x08
-
-loader_msg_start:  db "[LOADER] Started",0x0D,0x0A,0
-loader_msg_loaded: db "[LOADER] Kernel loaded",0x0D,0x0A,0
-loader_msg_pm:     db "[LOADER] Entering protected mode",0x0D,0x0A,0
-loader_msg_error:  db "[LOADER] KERNEL LOAD ERROR",0x0D,0x0A,0
-
-[bits 32]
-protected_mode_start:
-    ; reload selectors
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-
-    ; set protected-mode stack
-    mov esp, 0x00088000
-
-    ; debug marker: 'P' at top-left
-    mov edi, 0x000B8000
-    mov byte [edi], 'P'
-    mov byte [edi+1], 0x07
-
-    ; jump to kernel (flat binary must be at 0x00090000)
-    jmp 0x00090000

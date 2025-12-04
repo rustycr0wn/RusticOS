@@ -1,0 +1,79 @@
+[org 0x0000]
+[bits 16]
+
+jmp loader_start
+
+%include "boot/kernel_sectors.inc"
+
+; ============ GDT ============
+align 8
+gdt:
+    dq 0x0000000000000000
+    dq 0x00cf9a000000ffff
+    dq 0x00cf92000000ffff
+
+gdt_descriptor:
+    dw 23
+    dd 0x10000 + gdt
+
+; ============ Loader entry ============
+loader_start:
+    cli
+    cld
+    
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7000
+
+    ; === VGA: write 'L' ===
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0], 'L'
+    mov byte [es:1], 0x0F
+    mov byte [es:4], '1'
+    mov byte [es:5], 0x0F
+
+    ; === Write '2' before lgdt ===
+    mov byte [es:8], '2'
+    mov byte [es:9], 0x0F
+
+    ; Load GDT descriptor (gdt_descriptor already defined in data)
+    mov ax, 0x1000
+    mov ds, ax
+    lgdt [gdt_descriptor]
+
+    ; Write '3' - GDT loaded
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:12], '3'
+    mov byte [es:13], 0x0F
+
+    ; Enable protected mode
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+
+    ; Write '4' - about to jump
+    mov byte [es:16], '4'
+    mov byte [es:17], 0x0F
+
+    ; Far jump to protected mode
+    db 0xEA
+    dw protected_mode_start
+    dw 0x0008
+
+; ============ Protected mode ============
+[bits 32]
+protected_mode_start:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    mov byte [0xB8000], 'P'
+    mov byte [0xB8001], 0x07
+
+    cli
+    hlt
