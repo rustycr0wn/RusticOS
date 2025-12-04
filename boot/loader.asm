@@ -23,6 +23,19 @@ print_string:
 
 ; ---------------- loader entry ----------------
 loader_start:
+    ; ULTRA-EARLY debug: write 'L' directly at VGA before any other code
+    ; This confirms CPU is executing loader code
+    pushf
+    push ax
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0], 'L'
+    mov byte [es:1], 0x0F      ; bright white
+    pop es
+    pop ax
+    popf
+    
     cli
     ; set segment registers (loader loaded at 0x1000:0x0000 by MBR)
     mov ax, 0x1000
@@ -30,14 +43,6 @@ loader_start:
     mov es, ax
     mov ss, ax
     mov sp, 0xFFFF
-
-    ; immediate debug: 'L' at top-left so we know loader runs
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0], 'L'
-    mov byte [es:1], 0x07
-    pop es
 
     ; print started
     mov si, loader_msg_start
