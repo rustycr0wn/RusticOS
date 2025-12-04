@@ -12,108 +12,109 @@
 
 _start:
     cli
-    mov $0xb8000, %edi
-    mov $0x1f4b, %eax   # K in green
-    mov %eax, (%edi)
+    
+    # Print 'K' to VGA text buffer to confirm entry
+    movl $0xb8004, %esi
+    movb $'K', (%esi)
+    movb $0x0A, 1(%esi)
+    
+    movl $0xb8000, %edi
+    movl $0x1f4b, %eax   # K in green
+    movl %eax, (%edi)
 
     # Load GDT
     lea gdt_ptr, %eax
     lgdt (%eax)
 
-    mov $0xb8002, %edi
-    mov $0x1f47, %eax   # G in green
-    mov %eax, (%edi)
+    movl $0xb8002, %edi
+    movl $0x1f47, %eax   # G in green
+    movl %eax, (%edi)
 
     # Set segment registers (must be after GDT load)
-    mov $0x10, %ax
-    mov %ax, %ds
-    mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
-    mov %ax, %ss
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
 
-    mov $0xb8004, %edi
-    mov $0x1f53, %eax   # S in green
-    mov %eax, (%edi)
+    movl $0xb8004, %edi
+    movl $0x1f53, %eax   # S in green
+    movl %eax, (%edi)
 
     # Disable NMI and mask PIC IRQs
-    mov $0x70, %dx
+    movw $0x70, %dx
     inb (%dx), %al
     orb $0x80, %al
     outb %al, (%dx)
-    mov $0x21, %dx
-    mov $0xFF, %al
+    movw $0x21, %dx
+    movb $0xFF, %al
     outb %al, (%dx)
-    mov $0xA1, %dx
+    movw $0xA1, %dx
     outb %al, (%dx)
 
-    mov $0xb8006, %edi
-    mov $0x1f4e, %eax   # N in green
-    mov %eax, (%edi)
+    movl $0xb8006, %edi
+    movl $0x1f4e, %eax   # N in green
+    movl %eax, (%edi)
 
-    # Build a tiny IDT with a single halting handler for all vectors
+    # Build IDT with halting handler for all vectors
     lea idt, %edi
-    xor %eax, %eax
-    mov $256*8/4, %ecx
+    xorl %eax, %eax
+    movl $256*8/4, %ecx
     rep stosl                      # zero IDT
 
-    # Construct an interrupt gate descriptor (type 0x8E) to isr_stub
-    lea isr_stub, %eax             # handler offset
-    mov %ax, %dx                   # low 16 bits
-    mov $0x08, %bx                 # code segment selector
-    mov $0x8E00, %cx               # type and attr
-    # Fill all 256 entries
-    mov $0, %esi                   # i = 0
+    # Fill all 256 IDT entries with interrupt gate to isr_stub
+    lea isr_stub, %ebx             # ebx = handler address (save it)
+    movl $0, %esi                  # esi = current IDT entry offset (0..255*8)
 .fill_idt:
-    mov %dx, idt+0(%esi)           # offset_low
-    mov %bx, idt+2(%esi)           # selector
-    mov $0, %ax
-    mov %ax, idt+4(%esi)           # zero
-    mov %cx, idt+5(%esi)           # type_attr
-    shr $16, %eax                  # eax now high 16 of handler
-    mov %ax, idt+6(%esi)           # offset_high
-    lea isr_stub, %eax             # restore eax to full handler for next iter
-    add $8, %esi
-    cmp $256*8, %esi
-    jl .fill_idt
+    cmpl $256*8, %esi
+    jge .fill_idt_done
+    
+    movw %bx, idt+0(%esi)          # offset_low (16-bit)
+    movw $0x08, idt+2(%esi)        # selector (16-bit)
+    movl $0, idt+4(%esi)           # reserved (32-bit, zero)
+    movb $0x8E, idt+5(%esi)        # type_attr (8-bit)
+    movl %ebx, %eax
+    shrl $16, %eax                 # eax = high 16 bits of handler
+    movw %ax, idt+6(%esi)          # offset_high (16-bit)
+    
+    addl $8, %esi
+    jmp .fill_idt
 
+.fill_idt_done:
     # Load IDT
     lea idt_ptr, %eax
     lidt (%eax)
 
-    # After loading IDT
-    mov $0xb8008, %edi
-    mov $0x1f49, %eax   # I in green
-    mov %eax, (%edi)
+    movl $0xb8008, %edi
+    movl $0x1f49, %eax   # I in green
+    movl %eax, (%edi)
 
-    # Stack
-    mov $0x90000, %esp
-    and $~0xF, %esp          # align to 16 bytes
+    # Stack: use 0x00090000 (kernel at 0x00090000, stack below it)
+    movl $0x00088000, %esp
+    andl $~0xF, %esp          # align to 16 bytes
 
-    # After setting up stack
-    mov $0xb800A, %edi
-    mov $0x1f42, %eax   # B in green
-    mov %eax, (%edi)
+    movl $0xb800A, %edi
+    movl $0x1f42, %eax   # B in green
+    movl %eax, (%edi)
 
     # Clear .bss
     cld
-    mov $__bss_start, %edi
-    mov $__bss_end, %ecx
-    sub %edi, %ecx
+    movl $__bss_start, %edi
+    movl $__bss_end, %ecx
+    subl %edi, %ecx
     jbe .after_bss
-    xor %eax, %eax
+    xorl %eax, %eax
     rep stosb
 .after_bss:
 
-    # Debug M
-    mov $0xb8002, %edi
-    mov $0x1f4d, %eax
-    mov %eax, (%edi)
+    movl $0xb8002, %edi
+    movl $0x1f4d, %eax   # D in green
+    movl %eax, (%edi)
 
-    # Before calling kernel_main
-    mov $0xb800C, %edi
-    mov $0x1f4D, %eax   # M in green
-    mov %eax, (%edi)
+    movl $0xb800C, %edi
+    movl $0x1f4D, %eax   # M in green
+    movl %eax, (%edi)
 
     call kernel_main
 
@@ -121,7 +122,7 @@ _start:
     hlt
     jmp .hang
 
-# ---------------- Data: IDT ----------------
+# IDT
 .section .data
 .align 8
 idt:
@@ -130,18 +131,18 @@ idt_ptr:
     .word (256*8 - 1)
     .long idt
 
-# ---------------- Data: GDT ----------------
+# GDT
 .align 8
 gdt:
     .quad 0x0000000000000000     # Null descriptor
-    .quad 0x00cf9a000000ffff     # Code segment: base=0, limit=4GB, type=0x9A
-    .quad 0x00cf92000000ffff     # Data segment: base=0, limit=4GB, type=0x92
+    .quad 0x00cf9a000000ffff     # Code segment
+    .quad 0x00cf92000000ffff     # Data segment
 
 gdt_ptr:
     .word (3*8 - 1)
     .long gdt
 
-# Halting ISR stub
+# ISR stub
 .section .text
 .align 16
 isr_stub:

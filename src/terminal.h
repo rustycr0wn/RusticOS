@@ -1,7 +1,9 @@
 #ifndef TERMINAL_H
 #define TERMINAL_H
 
-#include <stdint.h>
+// Ensure fixed-width integer types are available in this freestanding build
+#include "types.h"
+
 #include "keyboard.h"
 
 /*

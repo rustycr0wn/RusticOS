@@ -1,6 +1,6 @@
 /* RusticOS kernel with command-line interface and filesystem */
-#include <stdint.h>
 #include "terminal.h"
+#include "types.h"
 #include "keyboard.h"
 #include "filesystem.h"
 #include "command.h"

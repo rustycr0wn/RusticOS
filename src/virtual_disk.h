@@ -1,7 +1,7 @@
 #ifndef VIRTUAL_DISK_H
 #define VIRTUAL_DISK_H
 
-#include <stdint.h>
+#include <cstdint>
 
 // Extremely simple in-memory virtual disk to represent sectors in the OS image
 // This is not persistent across runs unless the bootloader/loader copies sectors

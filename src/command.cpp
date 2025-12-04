@@ -1,236 +1,206 @@
 #include "command.h"
-#include "filesystem.h"
 #include "terminal.h"
-#include <cstddef>
+#include "filesystem.h"
+#include <cstring>
 
-// Global command system instance
-CommandSystem command_system;
+extern Terminal terminal;
+extern FileSystem filesystem;
 
-// Helper function to copy strings safely
-static void safe_strcpy(char* dest, const char* src, uint32_t max_len) {
-    uint32_t i = 0;
-    while (src[i] != '\0' && i < max_len - 1) {
-        dest[i] = src[i];
-        i++;
+CommandSystem::CommandSystem()
+    : input_pos(0), input_complete(false)
+{
+    for (int i = 0; i < MAX_COMMAND_LENGTH; ++i) {
+        input_buffer[i] = '\0';
     }
-    dest[i] = '\0';
+    clear_command(current_command);
 }
 
-// Helper function to get string length
-static uint32_t safe_strlen(const char* str) {
-    uint32_t len = 0;
-    while (str[len] != '\0') {
-        len++;
-    }
-    return len;
-}
-
-// Helper function to compare strings
-static bool safe_strcmp(const char* str1, const char* str2) {
-    uint32_t i = 0;
-    while (str1[i] != '\0' && str2[i] != '\0') {
-        if (str1[i] != str2[i]) return false;
-        i++;
-    }
-    return str1[i] == str2[i];
-}
-
-CommandSystem::CommandSystem() 
-    : input_pos(0), input_complete(false) {
-    input_buffer[0] = '\0';
-}
-
-void CommandSystem::process_input(char c) {
-    if (input_complete) {
-        reset_input();
+void CommandSystem::process_input(char c)
+{
+    if (c == '\b' || c == 0x08) {
+        if (input_pos > 0) {
+            input_pos--;
+            input_buffer[input_pos] = '\0';
+            terminal.write("\b \b");
+        }
+        return;
     }
     
     if (c == '\n' || c == '\r') {
         input_complete = true;
-        return;
-    }
-    
-    if (c == '\b' || c == 127) { // Backspace
-        if (input_pos > 0) {
-            input_pos--;
-            input_buffer[input_pos] = '\0';
-        }
+        terminal.write("\n");
         return;
     }
     
     if (c >= 32 && c <= 126 && input_pos < MAX_COMMAND_LENGTH - 1) {
-        input_buffer[input_pos] = c;
-        input_pos++;
+        input_buffer[input_pos++] = c;
         input_buffer[input_pos] = '\0';
+        char str[2] = {c, '\0'};
+        terminal.write(str);
     }
 }
 
-void CommandSystem::execute_command() {
-    if (!input_complete) return;
+void CommandSystem::execute_command()
+{
+    parse_command(input_buffer, current_command);
     
-    Command cmd;
-    clear_command(cmd);
-    parse_command(input_buffer, cmd);
-    
-    if (cmd.name[0] == '\0') {
-        reset_input();
+    if (current_command.name[0] == '\0') {
         return;
     }
     
-    // Execute command based on name
-    if (safe_strcmp(cmd.name, "help")) {
+    // Command dispatch
+    if (strcmp(current_command.name, "help") == 0) {
         cmd_help();
-    } else if (safe_strcmp(cmd.name, "makedir")) {
-        if (cmd.arg_count >= 1) {
-            cmd_makedir(cmd.args[0]);
-        } else {
-            terminal.write("makedir: missing operand\n");
+    } else if (strcmp(current_command.name, "clear") == 0) {
+        cmd_clear();
+    } else if (strcmp(current_command.name, "echo") == 0) {
+        cmd_echo();
+    } else if (strcmp(current_command.name, "mkdir") == 0) {
+        if (current_command.arg_count >= 1) {
+            cmd_mkdir(current_command.args[0]);
         }
-    } else if (safe_strcmp(cmd.name, "makefile")) {
-        if (cmd.arg_count >= 1) {
-            const char* name = cmd.args[0];
-            // Join remaining args with spaces as file content
-            char content_buf[MAX_COMMAND_LENGTH];
+    } else if (strcmp(current_command.name, "cd") == 0) {
+        if (current_command.arg_count >= 1) {
+            cmd_cd(current_command.args[0]);
+        }
+    } else if (strcmp(current_command.name, "ls") == 0) {
+        cmd_ls();
+    } else if (strcmp(current_command.name, "pwd") == 0) {
+        cmd_pwd();
+    } else if (strcmp(current_command.name, "touch") == 0) {
+        if (current_command.arg_count >= 1) {
+            cmd_touch(current_command.args[0]);
+        }
+    } else if (strcmp(current_command.name, "cat") == 0) {
+        if (current_command.arg_count >= 1) {
+            cmd_cat(current_command.args[0]);
+        }
+    } else if (strcmp(current_command.name, "write") == 0) {
+        if (current_command.arg_count >= 2) {
+            char content[256] = {0};
             uint32_t pos = 0;
-            for (uint32_t ai = 1; ai < cmd.arg_count && pos < MAX_COMMAND_LENGTH - 1; ++ai) {
-                const char* part = cmd.args[ai];
-                for (uint32_t i = 0; part[i] != '\0' && pos < MAX_COMMAND_LENGTH - 1; ++i) {
-                    content_buf[pos++] = part[i];
+            for (uint32_t ai = 1; ai < current_command.arg_count && pos < 255; ++ai) {
+                const char* part = current_command.args[ai];
+                for (uint32_t pi = 0; part[pi] && pos < 255; ++pi) {
+                    content[pos++] = part[pi];
                 }
-                if (ai + 1 < cmd.arg_count && pos < MAX_COMMAND_LENGTH - 1) {
-                    content_buf[pos++] = ' ';
+                if (ai + 1 < current_command.arg_count && pos < 255) {
+                    content[pos++] = ' ';
                 }
             }
-            content_buf[pos] = '\0';
-            const char* content = content_buf;
-            cmd_makefile(name, content);
-        } else {
-            terminal.write("makefile: missing operand\n");
+            content[pos] = '\0';
+            cmd_write(current_command.args[0], content);
         }
-    } else if (safe_strcmp(cmd.name, "chdir")) {
-        if (cmd.arg_count >= 1) {
-            cmd_chdir(cmd.args[0]);
-        } else {
-            terminal.write("chdir: missing operand\n");
-        }
-    } else if (safe_strcmp(cmd.name, "cwd")) {
-        cmd_cwd();
-    } else if (safe_strcmp(cmd.name, "clear")) {
-        cmd_clear();
     } else {
         terminal.write("Unknown command: ");
-        terminal.write(cmd.name);
+        terminal.write(current_command.name);
         terminal.write("\n");
     }
-    
-    reset_input();
 }
 
-void CommandSystem::reset_input() {
+void CommandSystem::reset_input()
+{
     input_pos = 0;
     input_complete = false;
-    input_buffer[0] = '\0';
+    for (int i = 0; i < MAX_COMMAND_LENGTH; ++i) {
+        input_buffer[i] = '\0';
+    }
+    clear_command(current_command);
 }
 
-void CommandSystem::parse_command(const char* input, Command& cmd) {
+void CommandSystem::parse_command(const char* input, Command& cmd)
+{
     clear_command(cmd);
-    if (!input) return;
-
-    // Skip leading spaces
+    
     uint32_t i = 0;
-    while (input[i] == ' ' || input[i] == '\t') i++;
+    uint32_t arg_index = 0;
     
     // Parse command name
-    uint32_t name_pos = 0;
-    while (input[i] != '\0' && input[i] != ' ' && input[i] != '\t' && name_pos < MAX_COMMAND_LENGTH - 1) {
-        cmd.name[name_pos++] = input[i++];
+    uint32_t np = 0;
+    while (input[i] && input[i] != ' ' && np < 63) {
+        cmd.name[np++] = input[i++];
     }
-    cmd.name[name_pos] = '\0';
-
+    cmd.name[np] = '\0';
+    
+    // Skip spaces
+    while (input[i] == ' ') i++;
+    
     // Parse arguments
-    uint32_t arg_index = 0;
-    while (input[i] != '\0' && arg_index < MAX_ARGS) {
-        // Skip whitespace
-        while (input[i] == ' ' || input[i] == '\t') i++;
-        if (input[i] == '\0') break;
-        // Read one argument
+    while (input[i] && arg_index < MAX_ARGS) {
         uint32_t ap = 0;
-        while (input[i] != '\0' && input[i] != ' ' && input[i] != '\t' && ap < MAX_COMMAND_LENGTH - 1) {
+        while (input[i] && input[i] != ' ' && ap < 63) {
             cmd.args[arg_index][ap++] = input[i++];
         }
         cmd.args[arg_index][ap] = '\0';
+        
+        if (ap > 0) {
             arg_index++;
+        }
+        
+        while (input[i] == ' ') i++;
     }
+    
     cmd.arg_count = arg_index;
 }
 
-void CommandSystem::clear_command(Command& cmd) {
+void CommandSystem::clear_command(Command& cmd)
+{
     cmd.name[0] = '\0';
     cmd.arg_count = 0;
-    for (uint32_t i = 0; i < MAX_ARGS; i++) {
+    for (int i = 0; i < MAX_ARGS; ++i) {
         cmd.args[i][0] = '\0';
     }
 }
 
+// Stub implementations
 void CommandSystem::cmd_help() {
-    terminal.write("\nAvailable commands:\n");
-    terminal.write("  help       - Show this help message\n");
-    terminal.write("  makedir    - Create a directory: makedir <name>\n");
-    terminal.write("  makefile   - Create a file: makefile <name> [content...]\n");
-    terminal.write("  chdir      - Change directory: chdir <path>\n");
-    terminal.write("  cwd        - Print working directory\n");
-    terminal.write("  clear      - Clear the screen\n");
-}
-
-void CommandSystem::cmd_makedir(const char* name) {
-    if (filesystem.mkdir(name)) {
-        terminal.write("Directory '");
-        terminal.write(name);
-        terminal.write("' created\n");
-    } else {
-        terminal.write("makedir: cannot create directory '");
-        terminal.write(name);
-        terminal.write("'\n");
-    }
-}
-
-void CommandSystem::cmd_makefile(const char* name, const char* content) {
-    if (!filesystem.create_file(name, "")) {
-        terminal.write("makefile: cannot create file '");
-        terminal.write(name);
-        terminal.write("'\n");
-        return;
-    }
-    if (content && content[0] != '\0') {
-        filesystem.write_file(name, content);
-    }
-}
-
-void CommandSystem::cmd_chdir(const char* path) {
-    if (!filesystem.cd(path)) {
-        terminal.write("chdir: ");
-        terminal.write(path);
-        terminal.write(": No such directory\n");
-    }
-}
-
-void CommandSystem::cmd_cwd() {
-    const char* current_path = filesystem.pwd();
-    terminal.write("\n");
-    terminal.write(current_path);
-    terminal.write("\n");
+    terminal.write("Available commands: help, clear, echo, mkdir, cd, ls, pwd, touch, cat, write\n");
 }
 
 void CommandSystem::cmd_clear() {
     terminal.clear();
-    // Redraw the header
-    terminal.setColor(TerminalColor::BLACK, TerminalColor::GREEN);
-    const char* title = "RusticOS        Level: Kernel        Version:1.0.0";
-    int len = 50;
-    int x = (80 - len) / 2;
-    for (int col = 0; col < 80; ++col) {
-        char ch = (col >= x && col < x + len) ? title[col - x] : ' ';
-        terminal.writeAt(&ch, col, 0);
-    }
-    terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
 }
+
+void CommandSystem::cmd_echo() {
+    if (current_command.arg_count > 0) {
+        for (uint32_t i = 0; i < current_command.arg_count; ++i) {
+            terminal.write(current_command.args[i]);
+            if (i + 1 < current_command.arg_count) terminal.write(" ");
+        }
+    }
+    terminal.write("\n");
+}
+
+void CommandSystem::cmd_mkdir(const char* name) {
+    filesystem.mkdir(name);
+}
+
+void CommandSystem::cmd_cd(const char* path) {
+    filesystem.cd(path);
+}
+
+void CommandSystem::cmd_ls() {
+    filesystem.ls();
+}
+
+void CommandSystem::cmd_pwd() {
+    filesystem.pwd();
+}
+
+void CommandSystem::cmd_touch(const char* name) {
+    filesystem.create_file(name, "");
+}
+
+void CommandSystem::cmd_cat(const char* name) {
+    char buffer[512] = {0};
+    if (filesystem.read_file(name, buffer, 511)) {
+        terminal.write(buffer);
+        terminal.write("\n");
+    }
+}
+
+void CommandSystem::cmd_write(const char* name, const char* content) {
+    filesystem.write_file(name, content);
+}
+
+CommandSystem command_system;

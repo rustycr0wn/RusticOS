@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "virtual_disk.h"
 
 static uint8_t VDISK_BUFFER[VDISK_SECTOR_SIZE * VDISK_NUM_SECTORS];
