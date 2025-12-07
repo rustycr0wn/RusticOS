@@ -1,79 +1,244 @@
 [org 0x0000]
 [bits 16]
 
-jmp loader_start
-
 %include "boot/kernel_sectors.inc"
 
-; ============ GDT ============
-align 8
-gdt:
-    dq 0x0000000000000000
-    dq 0x00cf9a000000ffff
-    dq 0x00cf92000000ffff
-
-gdt_descriptor:
-    dw 23
-    dd 0x10000 + gdt
-
-; ============ Loader entry ============
 loader_start:
     cli
     cld
-    
     xor ax, ax
-    mov ds, ax
-    mov es, ax
     mov ss, ax
-    mov sp, 0x7000
+    mov sp, 0x7c00
 
-    ; === VGA: write 'L' ===
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0], 'L'
-    mov byte [es:1], 0x0F
-    mov byte [es:4], '1'
-    mov byte [es:5], 0x0F
-
-    ; === Write '2' before lgdt ===
-    mov byte [es:8], '2'
-    mov byte [es:9], 0x0F
-
-    ; Load GDT descriptor (gdt_descriptor already defined in data)
     mov ax, 0x1000
     mov ds, ax
-    lgdt [gdt_descriptor]
-
-    ; Write '3' - GDT loaded
-    mov ax, 0xB800
     mov es, ax
-    mov byte [es:12], '3'
-    mov byte [es:13], 0x0F
 
-    ; Enable protected mode
-    mov eax, cr0
-    or eax, 1
-    mov cr0, eax
+    mov si, msg_started
+    call print_string
 
-    ; Write '4' - about to jump
-    mov byte [es:16], '4'
-    mov byte [es:17], 0x0F
-
-    ; Far jump to protected mode
-    db 0xEA
-    dw protected_mode_start
-    dw 0x0008
-
-; ============ Protected mode ============
-[bits 32]
-protected_mode_start:
-    mov ax, 0x10
+    ; Copy DAP to low memory 0x0000:0x0700
+    mov ax, 0x1000
     mov ds, ax
+    mov si, dap
+    mov ax, 0x0000
     mov es, ax
-    mov ss, ax
+    mov di, 0x0700
+    mov cx, 8
+    cld
+    rep movsw
 
-    mov byte [0xB8000], 'P'
-    mov byte [0xB8001], 0x07
+    ; Call extended INT13 with DAP at 0x0000:0x0700
+    mov ax, 0x0000
+    mov ds, ax
+    mov si, 0x0700
+    mov ah, 0x42
+    mov dl, 0x80
+    int 0x13
 
+    ; Restore DS and check result
+    mov ax, 0x1000
+    mov ds, ax
+
+    jc .read_error
+
+    mov si, msg_kernel_loaded
+    call print_string
+
+    ; Validate kernel at 0x90000
+    mov ax, 0x9000
+    mov ds, ax
+    mov eax, dword [0x0000]
+    cmp eax, 0
+    jne .kernel_valid
+
+    ; Extended read returned success but memory is still zero.
+    ; Print diagnostic: show what we read at 0x90000
+    mov si, msg_validating
+    call print_string
+    ; Print first dword in hex: EAX should be 0
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, msg_chs_fallback
+    call print_string
+
+    mov ax, 0x9000
+    mov es, ax
+    xor bx, bx              ; offset within ES
+    mov ch, 0               ; cylinder 0
+    mov cl, 3               ; sector 3 (LBA 2 maps to sector 3 on head 0)
+    mov dh, 0               ; head 0
+    mov dl, 0x80            ; drive 0
+    mov bp, KERNEL_SECTORS  ; Use BP as loop counter (don't use CX!)
+
+.chs_loop:
+    cmp bp, 0
+    je .chs_loop_end
+    
+    mov ah, 0x02
+    mov al, 1               ; read 1 sector per iteration
+    int 0x13
+    jc .chs_error
+
+    ; Advance to next sector
+    add bx, 512
+    cmp bx, 0xF800          ; if bx wraps past 63.5KB in segment
+    jl .no_seg_wrap
+    ; Wrap segment forward and reset offset
+    mov bx, 0
+    mov ax, es
+    add ax, 0x1000          ; advance segment by 64KB
+    mov es, ax
+.no_seg_wrap:
+    ; Increment sector
+    inc cl
+    cmp cl, 64
+    jl .chs_continue
+    ; Wrap to next head
+    mov cl, 1
+    inc dh
+    cmp dh, 2
+    jl .chs_continue
+    ; Wrap to next cylinder
+    mov dh, 0
+    inc ch
+
+.chs_continue:
+    dec bp                  ; Decrement loop counter
+    jmp .chs_loop
+
+.chs_loop_end:
+    ; After CHS read, validate kernel
+    ; CX is now 0 after loop, restore it and check kernel
+    mov ax, 0x1000
+    mov ds, ax
+    mov ax, 0x9000
+    mov es, ax
+    mov eax, dword [es:0x0000]
+    cmp eax, 0
+    je .kernel_invalid_chs
+    
+    ; CHS succeeded! Restore DS and jump to kernel_valid
+    mov ax, 0x1000
+    mov ds, ax
+
+.kernel_valid:
+    mov si, msg_kernel_valid
+    call print_string
+    
+    ; Prepare to enter protected mode and jump to kernel at 0x90000
+    
+    ; Load GDT
+    lgdt [gdt_ptr]
+    
+    ; Disable interrupts during mode switch
     cli
-    hlt
+    
+    ; Set CR0.PE to enter protected mode
+    mov eax, cr0
+    or eax, 0x00000001     ; Set PE bit
+    mov cr0, eax
+    
+    ; Far jump to kernel at 0x90000 using code selector 0x08
+    jmp 0x08:0x90000
+
+.halt:
+    jmp .halt
+
+.chs_error:
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, msg_chs_error
+    call print_string
+    jmp .halt
+
+.kernel_invalid_chs:
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, msg_kernel_invalid_chs
+    call print_string
+    jmp .halt
+
+.kernel_invalid:
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, msg_kernel_invalid
+    call print_string
+    jmp .halt
+
+.read_error:
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, msg_read_error
+    call print_string
+    jmp .halt
+
+; ========== HELPERS ==========
+; Print string using INT 10h, 0xE9 port, and direct VGA memory
+print_string:
+    mov ah, 0x0E
+    mov bx, 0        ; Set BH=0 (page 0) for INT 10h
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    int 0x10
+    ; Try both serial and debug port
+    out 0xE9, al
+    mov dx, 0x3F8
+    out dx, al
+    jmp .loop
+.done:
+    ret
+
+; ========== MESSAGES ==========
+msg_started:            db "[LOADER] Started", 0x0D, 0x0A, 0
+msg_kernel_loaded:      db "[LOADER] Kernel loaded (from disk)", 0x0D, 0x0A, 0
+msg_validating:         db "[LOADER] Validating kernel at 0x90000...", 0x0D, 0x0A, 0
+msg_chs_fallback:       db "[LOADER] Extended read OK but memory zero. Trying CHS fallback...", 0x0D, 0x0A, 0
+msg_kernel_valid:       db "[LOADER] Kernel validated in memory", 0x0D, 0x0A, 0
+msg_kernel_invalid:     db "[LOADER] Kernel invalid (first dword is zero)", 0x0D, 0x0A, 0
+msg_kernel_invalid_chs: db "[LOADER] CHS read: Kernel still invalid", 0x0D, 0x0A, 0
+msg_chs_error:          db "[LOADER] CHS read failed", 0x0D, 0x0A, 0
+msg_read_error:         db "[LOADER] INT13 extended read failed", 0x0D, 0x0A, 0
+
+; ========== GDT (Global Descriptor Table) ==========
+; 3-entry GDT: null, code (0x08), data (0x10)
+gdt:
+    ; GDT Entry 0: Null descriptor
+    dq 0x0000000000000000
+    
+    ; GDT Entry 1 (offset 0x08): 32-bit Code segment
+    ; Base=0x00000000, Limit=0xFFFFF, Type=Code (1011), P=1, S=1, DPL=0, DB=1, G=1
+    dw 0xFFFF           ; Limit 15:0
+    dw 0x0000           ; Base 15:0
+    db 0x00             ; Base 23:16
+    db 0x9A             ; P=1, DPL=0, S=1, Type=1010 (code)
+    db 0xCF             ; G=1, DB=1, L=0, AVL=0, Limit 19:16=1111
+    db 0x00             ; Base 31:24
+    
+    ; GDT Entry 2 (offset 0x10): 32-bit Data segment
+    ; Base=0x00000000, Limit=0xFFFFF, Type=Data (0011), P=1, S=1, DPL=0, DB=1, G=1
+    dw 0xFFFF           ; Limit 15:0
+    dw 0x0000           ; Base 15:0
+    db 0x00             ; Base 23:16
+    db 0x92             ; P=1, DPL=0, S=1, Type=0010 (data)
+    db 0xCF             ; G=1, DB=1, L=0, AVL=0, Limit 19:16=1111
+    db 0x00             ; Base 31:24
+
+; GDT Pointer for LGDT
+; The loader is at 0x10000 linear (0x1000:0x0000 in segment notation)
+; So GDT address = 0x10000 + offset of gdt label
+gdt_ptr:
+    dw gdt_end - gdt - 1  ; GDT limit (size - 1)
+    dd 0x10000 + gdt      ; GDT base address (0x10000 + offset)
+gdt_end:
+
+; ========== DAP ==========
+align 16
+dap:
+    db 0x10, 0x00
+    dw KERNEL_SECTORS
+    dw 0x0000
+    dw 0x9000
+    dq 2

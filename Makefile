@@ -32,6 +32,7 @@ KERNEL_OBJS := $(BUILD_DIR)/crt0.o $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,
 BOOTLOADER_SRC := $(BOOT_DIR)/bootloader.asm
 LOADER_SRC := $(BOOT_DIR)/loader.asm
 
+
 BOOTLOADER_BIN := $(BUILD_DIR)/bootloader.bin
 LOADER_BIN := $(BUILD_DIR)/loader.bin
 BOOTLOADER_PADDED := $(BUILD_DIR)/bootloader_padded.bin
@@ -90,9 +91,12 @@ $(BOOTLOADER_BIN): $(BOOTLOADER_SRC) boot/loader_sectors.inc | $(BUILD_DIR)
 	@$(NASM) -f bin -o $@ $<
 
 # Assemble loader (depends on generated kernel include)
+
 $(LOADER_BIN): $(LOADER_SRC) boot/kernel_sectors.inc | $(BUILD_DIR)
 	@echo "Assembling loader..."
 	@$(NASM) -f bin -o $@ $<
+	@# After assembling loader, patch its DAP LBA placeholder with the actual kernel seek
+	@sh -c 'loader_size=$$(stat -c%s "$@"); loader_sectors=$$(( (loader_size + 511) / 512 )); kernel_seek=$$((1 + loader_sectors)); python3 scripts/patch_loader_dap.py "$(LOADER_BIN)" $$kernel_seek || true'
 
 # Pad bootloader to 512 bytes (full sector)
 $(BOOTLOADER_PADDED): $(BOOTLOADER_BIN)
@@ -104,20 +108,42 @@ $(LOADER_PADDED): $(LOADER_BIN)
 	@echo "Padding loader to full sectors..."
 	@$(DD) if=$(LOADER_BIN) of=$@ bs=512 conv=sync 2>/dev/null
 
+
 # Create disk image with bootloader, loader, and kernel
 $(DISK_IMG): $(BOOTLOADER_PADDED) $(LOADER_PADDED) $(KERNEL_BIN) | $(BUILD_DIR)
 	@echo "Creating disk image..."
 	@$(DD) if=/dev/zero of=$@ bs=512 count=256 2>/dev/null
 	@$(DD) if=$(BOOTLOADER_PADDED) of=$@ bs=512 seek=0 conv=notrunc 2>/dev/null
 	@$(DD) if=$(LOADER_PADDED) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
-	@$(DD) if=$(KERNEL_BIN) of=$@ bs=512 seek=2 conv=notrunc 2>/dev/null
+	@# Compute loader sectors and place kernel after loader
+	@loader_size=$$(stat -c%s $(LOADER_BIN)); \
+	loader_sectors=$$(( (loader_size + 511) / 512 )); \
+	kernel_seek=$$((1 + loader_sectors)); \
+	$(DD) if=$(KERNEL_BIN) of=$@ bs=512 seek=$$kernel_seek conv=notrunc 2>/dev/null
 	@echo "Disk image created: $@"
 	@printf "  Bootloader:  sector 0 (%d bytes)\n" $$(stat -c%s $(BOOTLOADER_BIN))
-	@printf "  Loader:      sectors 1-$$(($$(stat -c%s $(LOADER_BIN)) / 512)) (%d bytes)\n" $$(stat -c%s $(LOADER_BIN))
-	@printf "  Kernel:      sectors 2+ (%d bytes)\n" $$(stat -c%s $(KERNEL_BIN))
+	@printf "  Loader:      sectors 1-%d (%d bytes)\n" $$((1 + loader_sectors - 1)) $$(stat -c%s $(LOADER_BIN))
+	@printf "  Kernel:      sectors %d+ (%d bytes)\n" $$kernel_seek $$(stat -c%s $(KERNEL_BIN))
 
 # Build all
 all: $(DISK_IMG)
+
+# Convenience build targets for iterative development
+# Avoid name collision with the `build` directory target; provide `build-all`
+.PHONY: build-all kernel loader bootloader image
+
+# Build core artifacts (kernel, loader, bootloader) without creating full disk image
+build-all: $(KERNEL_BIN) $(LOADER_BIN) $(BOOTLOADER_BIN)
+
+# Component targets
+kernel: $(KERNEL_BIN)
+
+loader: $(LOADER_BIN)
+
+bootloader: $(BOOTLOADER_BIN)
+
+# Alias for the full disk image
+image: $(DISK_IMG)
 
 # Run in QEMU with stdio
 run: $(DISK_IMG)
@@ -128,6 +154,12 @@ run: $(DISK_IMG)
 run-debug: $(DISK_IMG)
 	@echo "Running QEMU (debug mode: -no-reboot)..."
 	@$(QEMU) -drive format=raw,file=$< -m 512M -serial stdio -no-reboot
+
+# Run with serial logged to file and no-reboot for debugging
+run-test: $(DISK_IMG)
+	@echo "Running QEMU (test: serial to file, no-reboot)..."
+	@$(QEMU) -drive format=raw,file=$< -m 512M -serial file:$(BUILD_DIR)/serial.log -nographic -no-reboot
+	@echo "Serial output logged to $(BUILD_DIR)/serial.log"
 
 # Clean build files
 clean:

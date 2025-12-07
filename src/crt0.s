@@ -12,6 +12,16 @@
 
 _start:
     cli
+    # Early serial trace: write "KERNEL PM\n" to COM1 (port 0x3F8)
+    leal serial_msg, %esi
+    movw $0x3F8, %dx
+1:  lodsb
+    testb %al, %al
+    je 2f
+    movw $0x3F8, %dx
+    outb %al, (%dx)
+    jmp 1b
+2:
     
     # Print 'K' to VGA text buffer to confirm entry
     movl $0xb8004, %esi
@@ -130,6 +140,11 @@ idt:
 idt_ptr:
     .word (256*8 - 1)
     .long idt
+
+# Serial message used by early kernel trace
+.align 1
+serial_msg:
+    .ascii "KERNEL PM\n\0"
 
 # GDT
 .align 8
