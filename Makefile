@@ -119,11 +119,20 @@ $(DISK_IMG): $(BOOTLOADER_PADDED) $(LOADER_PADDED) $(KERNEL_BIN) | $(BUILD_DIR)
 	@loader_size=$$(stat -c%s $(LOADER_BIN)); \
 	loader_sectors=$$(( (loader_size + 511) / 512 )); \
 	kernel_seek=$$((1 + loader_sectors)); \
+	kernel_sectors=$$(( ($(KERNEL_SIZE_BYTES) + 511) / 512 )); \
+	kernel_end=$$((kernel_seek + kernel_sectors - 1)); \
 	$(DD) if=$(KERNEL_BIN) of=$@ bs=512 seek=$$kernel_seek conv=notrunc 2>/dev/null
 	@echo "Disk image created: $@"
-	@printf "  Bootloader:  sector 0 (%d bytes)\n" $$(stat -c%s $(BOOTLOADER_BIN))
-	@printf "  Loader:      sectors 1-%d (%d bytes)\n" $$((1 + loader_sectors - 1)) $$(stat -c%s $(LOADER_BIN))
-	@printf "  Kernel:      sectors %d+ (%d bytes)\n" $$kernel_seek $$(stat -c%s $(KERNEL_BIN))
+	@loader_size=$$(stat -c%s $(LOADER_BIN)); \
+	loader_sectors=$$(( (loader_size + 511) / 512 )); \
+	kernel_seek=$$((1 + loader_sectors)); \
+	kernel_size=$$(stat -c%s $(KERNEL_BIN)); \
+	kernel_sectors=$$(( (kernel_size + 511) / 512 )); \
+	kernel_end=$$((kernel_seek + kernel_sectors - 1)); \
+	printf "  Bootloader:  sector 0 (%d bytes)\n" $$(stat -c%s $(BOOTLOADER_BIN)); \
+	printf "  Loader:      sectors 1-%d (%d bytes)\n" $$((kernel_seek - 1)) $$loader_size; \
+	printf "  Kernel:      sectors %d-%d (%d bytes)\n" $$kernel_seek $$kernel_end $$kernel_size
+
 
 # Build all
 all: $(DISK_IMG)
@@ -148,17 +157,17 @@ image: $(DISK_IMG)
 # Run in QEMU with stdio
 run: $(DISK_IMG)
 	@echo "Running QEMU..."
-	@$(QEMU) -drive format=raw,file=$< -m 512M -serial stdio
+	@$(QEMU) -drive format=raw,file=$< -m 512M -serial file:/tmp/qemu_serial.log
 
 # Run in QEMU with debugging (no reboot on halt)
 run-debug: $(DISK_IMG)
 	@echo "Running QEMU (debug mode: -no-reboot)..."
-	@$(QEMU) -drive format=raw,file=$< -m 512M -serial stdio -no-reboot
+	@$(QEMU) -drive format=raw,file=$<,if=floppy -m 512M -serial stdio -no-reboot
 
 # Run with serial logged to file and no-reboot for debugging
 run-test: $(DISK_IMG)
 	@echo "Running QEMU (test: serial to file, no-reboot)..."
-	@$(QEMU) -drive format=raw,file=$< -m 512M -serial file:$(BUILD_DIR)/serial.log -nographic -no-reboot
+	@$(QEMU) -drive format=raw,file=$<,if=floppy -m 512M -serial file:$(BUILD_DIR)/serial.log -nographic -no-reboot
 	@echo "Serial output logged to $(BUILD_DIR)/serial.log"
 
 # Clean build files

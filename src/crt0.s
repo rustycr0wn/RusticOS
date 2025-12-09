@@ -23,34 +23,13 @@ _start:
     jmp 1b
 2:
     
-    # Print 'K' to VGA text buffer to confirm entry
-    movl $0xb8004, %esi
-    movb $'K', (%esi)
-    movb $0x0A, 1(%esi)
-    
+    # Print 'K' to VGA text buffer to confirm kernel entry
     movl $0xb8000, %edi
     movl $0x1f4b, %eax   # K in green
     movl %eax, (%edi)
 
-    # Load GDT
-    lea gdt_ptr, %eax
-    lgdt (%eax)
-
-    movl $0xb8002, %edi
-    movl $0x1f47, %eax   # G in green
-    movl %eax, (%edi)
-
-    # Set segment registers (must be after GDT load)
-    movw $0x10, %ax
-    movw %ax, %ds
-    movw %ax, %es
-    movw %ax, %fs
-    movw %ax, %gs
-    movw %ax, %ss
-
-    movl $0xb8004, %edi
-    movl $0x1f53, %eax   # S in green
-    movl %eax, (%edi)
+    # GDT already loaded by loader, segment registers already set
+    # Just verify we're in protected mode and continue
 
     # Disable NMI and mask PIC IRQs
     movw $0x70, %dx
