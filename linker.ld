@@ -20,8 +20,11 @@ SECTIONS
   {
     . = ALIGN(0x1000);
     *(.multiboot)
-    *(.text)
+    build/crt0.o(.text._start)
+    build/crt0.o(.text)
+    build/crt0.o(.text.*)
     *(.text.*)
+    *(.text)
     *(.rodata)
     *(.rodata.*)
   } :text

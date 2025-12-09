@@ -121,9 +121,8 @@ loader_start:
 
     ; CRITICAL: Far jump immediately after PE bit set
     ; This jumps to protected mode code and reloads CS
-    ; pm_entry_32 is at offset 0x190 in the loader (linear 0x1190 = 0x1000 + 0x190)
-    ; In protected mode with selector 0x08 (base=0), use offset 0x190
-    jmp 0x08:0x190
+    ; Use hardcoded address 0x1190 which is where pm_entry_32 actually is
+    jmp 0x08:0x1190
 
 .halt:
     hlt
@@ -187,7 +186,7 @@ gdt:
 
 ; ---------------------------
 ; Protected-mode entry stub (32-bit)
-; - Reached after retf with CS=0x08 (code selector)
+; - Reached after far jump with CS=0x08 (code selector)
 ; - Initializes data selectors and ESP, then jumps to kernel
 ; ---------------------------
 align 4

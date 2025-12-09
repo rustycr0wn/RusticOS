@@ -105,7 +105,8 @@ void Terminal::putChar(char c) {
     // Draw the character at current cursor position
     const uint32_t index = cursor_y * VGA_WIDTH + cursor_x;
     if (index < VGA_WIDTH * VGA_HEIGHT) {
-        VGA_BUFFER[index] = (uint16_t)c | (uint16_t)(background_color << 12) | (uint16_t)(foreground_color << 8);
+        uint8_t attr = (background_color << 4) | foreground_color;
+        VGA_BUFFER[index] = (uint16_t)c | ((uint16_t)attr << 8);
     }
 
     cursor_x++;
