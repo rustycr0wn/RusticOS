@@ -228,7 +228,8 @@ void Terminal::scrollDown(uint16_t lines) {
 void Terminal::clear_line(uint16_t y) {
     for (uint16_t x = 0; x < VGA_WIDTH; ++x) {
         uint32_t index = y * VGA_WIDTH + x;
-        VGA_BUFFER[index] = (uint16_t)' ' | (uint16_t)(background_color << 12) | (uint16_t)(foreground_color << 8);
+        uint16_t attr = ((uint16_t)(background_color << 4) | (uint16_t)foreground_color) << 8;
+        VGA_BUFFER[index] = (uint16_t)' ' | attr;
     }
 }
 

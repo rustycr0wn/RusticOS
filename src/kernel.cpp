@@ -4,6 +4,7 @@
 #include "keyboard.h"
 #include "filesystem.h"
 #include "command.h"
+#include <cstring>
 
 #define VGA_ATTRIBUTE(fg, bg) (((bg) << 4) | (fg))
 
@@ -21,7 +22,7 @@ static inline void outb(uint16_t port, uint8_t value) {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
-// Simple keyboard polling function
+// Simple keyboard polling function - just echo input for now
 bool poll_keyboard() {
     // Check if keyboard has data
     if ((inb(0x64) & 0x01) == 0) {
@@ -31,7 +32,7 @@ bool poll_keyboard() {
     uint8_t scan_code = inb(0x60);
     
     // Handle key press/release
-    bool key_released = (scan_code & 0x80) != 0; // 
+    bool key_released = (scan_code & 0x80) != 0;
     uint8_t key_code = scan_code & 0x7F;
     
     if (key_released) {
@@ -84,35 +85,19 @@ bool poll_keyboard() {
     }
     
     if (ascii != 0) {
-        // Process the character
-        if (ascii == '\n') {
-            // Move cursor to new line before executing to ensure output starts on its own line
-            terminal.putChar('\n');
-            // Mark input as complete and execute command
-            command_system.process_input('\n');
-            command_system.execute_command();
-            // Show new prompt
-            terminal.write(">");
-            // Record prompt start position (protect from backspace) and place cursor after prompt
-            prompt_start_x = terminal.getCursorX();
-            prompt_start_y = terminal.getCursorY();
-            terminal.setCursor(prompt_start_x, prompt_start_y);
-        } else if (ascii == '\b') {
-            // Handle backspace: update input buffer and visually erase last char without printing '\b'
-            command_system.process_input(ascii);
-            // Visually erase one character if we're not at column 0
+        // Just echo the character for now
+        if (ascii == '\b') {
             uint16_t curX = terminal.getCursorX();
             uint16_t curY = terminal.getCursorY();
-            // Prevent deleting the prompt ("> ") by limiting how far back we can go
-            bool can_delete = (curY > prompt_start_y) || (curY == prompt_start_y && curX > prompt_start_x);
-            if (can_delete && curX > 0) {
+            if (curX > 0) {
                 terminal.setCursor(curX - 1, curY);
                 terminal.putChar(' ');
                 terminal.setCursor(curX - 1, curY);
             }
+        } else if (ascii == '\n') {
+            terminal.putChar('\n');
+            terminal.write(">");
         } else {
-            // Regular character
-            command_system.process_input(ascii);
             terminal.putChar(ascii);
         }
         return true;
@@ -130,45 +115,187 @@ void write_title(const char* title) {
     // Shift left 8 bits for high byte: 0x2000
     uint16_t attr = 0x2000;
     
-    // Fill entire row (80 columns) with string data first
+    // Fill entire row 0 with spaces first
     for (int col = 0; col < 80; col++) {
-        vga[col] = title[col] | attr;
+        vga[col] = (uint16_t)' ' | attr;
+    }
+    
+    // Write each character of the title manually
+    //vga[15] = (uint16_t)'R' | attr;
+    //vga[16] = (uint16_t)'u' | attr;
+    //vga[17] = (uint16_t)'s' | attr;
+    //vga[18] = (uint16_t)'t' | attr;
+    //vga[19] = (uint16_t)'i' | attr;
+    //vga[20] = (uint16_t)'c' | attr;
+    //vga[21] = (uint16_t)'O' | attr;
+    //vga[22] = (uint16_t)'S' | attr;
+    //vga[23] = (uint16_t)' ' | attr;
+    //vga[24] = (uint16_t)' ' | attr;
+    //vga[25] = (uint16_t)' ' | attr;
+    //vga[26] = (uint16_t)' ' | attr;
+    //vga[27] = (uint16_t)' ' | attr;
+    //vga[28] = (uint16_t)' ' | attr;
+    //vga[29] = (uint16_t)' ' | attr;
+    //vga[30] = (uint16_t)' ' | attr;
+    //vga[31] = (uint16_t)'L' | attr;
+    //vga[32] = (uint16_t)'e' | attr;
+    //vga[33] = (uint16_t)'v' | attr;
+    //vga[34] = (uint16_t)'e' | attr;
+    //vga[35] = (uint16_t)'l' | attr;
+    //vga[36] = (uint16_t)':' | attr;
+    //vga[37] = (uint16_t)'K' | attr;
+    //vga[38] = (uint16_t)'e' | attr;
+    //vga[39] = (uint16_t)'r' | attr;
+    //vga[40] = (uint16_t)'n' | attr;
+    //vga[41] = (uint16_t)'e' | attr;
+    //vga[42] = (uint16_t)'l' | attr;
+    //vga[43] = (uint16_t)' ' | attr;
+    //vga[44] = (uint16_t)' ' | attr;
+    //vga[45] = (uint16_t)' ' | attr;
+    //vga[46] = (uint16_t)' ' | attr;
+    //vga[47] = (uint16_t)' ' | attr;
+    //vga[48] = (uint16_t)' ' | attr;
+    //vga[49] = (uint16_t)' ' | attr;
+    //vga[50] = (uint16_t)' ' | attr;
+    //vga[51] = (uint16_t)'V' | attr;
+    //vga[52] = (uint16_t)'e' | attr;
+    //vga[53] = (uint16_t)'r' | attr;
+    //vga[54] = (uint16_t)'s' | attr;
+    //vga[55] = (uint16_t)'i' | attr;
+    //vga[56] = (uint16_t)'o' | attr;
+    //vga[57] = (uint16_t)'n' | attr;
+    //vga[58] = (uint16_t)':' | attr;
+    //vga[59] = (uint16_t)'1' | attr;
+    //vga[60] = (uint16_t)'.' | attr;
+    //vga[61] = (uint16_t)'0' | attr;
+    //vga[62] = (uint16_t)'.' | attr;
+    //vga[63] = (uint16_t)'0' | attr;
+}
+
+// Serial output helper
+static void serial_write(const char* str) {
+    while (*str) {
+        // Wait for transmit ready
+        while ((inb(0x3FD) & 0x20) == 0);
+        outb(0x3F8, *str);
+        str++;
     }
 }
 
 extern "C" void kernel_main() {
-    // Initialize components
+    // Initialize serial for debugging
+    outb(0x3F8 + 1, 0x00);    // Disable all interrupts
+    outb(0x3F8 + 3, 0x80);    // Enable DLAB (set baud rate divisor)
+    outb(0x3F8 + 0, 0x03);    // Set divisor to 3 (115200 baud)
+    outb(0x3F8 + 1, 0x00);    // Set divisor high byte to 0
+    outb(0x3F8 + 3, 0x03);    // Disable DLAB, set 8 bits, no parity, 1 stop bit
+    outb(0x3F8 + 2, 0xC7);    // Enable FIFO, clear them, set level to 14 bytes
+    
+    serial_write("===== KERNEL STARTED =====\n");
+    
+    // Write to VGA buffer
+    volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
+    
+    serial_write("Writing title to row 0...\n");
+    
+    // Fill row 0 with spaces first (green background, black text)
+    // Use volatile writes and read-modify-write to prevent compiler optimizations
+    uint16_t space_attr = (uint16_t)' ' | 0x2000;
+    for (int col = 0; col < 80; col++) {
+        *(vga + col) = space_attr;
+        asm volatile("");  // Memory barrier to force write
+    }
+    
+    serial_write("Row cleared.\n");
+    
+    // Write title manually at column 15 (like before)
+    uint16_t attr = 0x2000;
+    
+    vga[15] = (uint16_t)'R' | attr; asm volatile("");
+    vga[16] = (uint16_t)'u' | attr; asm volatile("");
+    vga[17] = (uint16_t)'s' | attr; asm volatile("");
+    vga[18] = (uint16_t)'t' | attr; asm volatile("");
+    vga[19] = (uint16_t)'i' | attr; asm volatile("");
+    vga[20] = (uint16_t)'c' | attr; asm volatile("");
+    vga[21] = (uint16_t)'O' | attr; asm volatile("");
+    vga[22] = (uint16_t)'S' | attr; asm volatile("");
+    vga[23] = (uint16_t)' ' | attr; asm volatile("");
+    vga[24] = (uint16_t)' ' | attr; asm volatile("");
+    vga[25] = (uint16_t)' ' | attr; asm volatile("");
+    vga[26] = (uint16_t)' ' | attr; asm volatile("");
+    vga[27] = (uint16_t)' ' | attr; asm volatile("");
+    vga[28] = (uint16_t)' ' | attr; asm volatile("");
+    vga[29] = (uint16_t)' ' | attr; asm volatile("");
+    vga[30] = (uint16_t)' ' | attr; asm volatile("");
+    vga[31] = (uint16_t)'L' | attr; asm volatile("");
+    vga[32] = (uint16_t)'e' | attr; asm volatile("");
+    vga[33] = (uint16_t)'v' | attr; asm volatile("");
+    vga[34] = (uint16_t)'e' | attr; asm volatile("");
+    vga[35] = (uint16_t)'l' | attr; asm volatile("");
+    vga[36] = (uint16_t)':' | attr; asm volatile("");
+    vga[37] = (uint16_t)'K' | attr; asm volatile("");
+    vga[38] = (uint16_t)'e' | attr; asm volatile("");
+    vga[39] = (uint16_t)'r' | attr; asm volatile("");
+    vga[40] = (uint16_t)'n' | attr; asm volatile("");
+    vga[41] = (uint16_t)'e' | attr; asm volatile("");
+    vga[42] = (uint16_t)'l' | attr; asm volatile("");
+    vga[43] = (uint16_t)' ' | attr; asm volatile("");
+    vga[44] = (uint16_t)' ' | attr; asm volatile("");
+    vga[45] = (uint16_t)' ' | attr; asm volatile("");
+    vga[46] = (uint16_t)' ' | attr; asm volatile("");
+    vga[47] = (uint16_t)' ' | attr; asm volatile("");
+    vga[48] = (uint16_t)' ' | attr; asm volatile("");
+    vga[49] = (uint16_t)' ' | attr; asm volatile("");
+    vga[50] = (uint16_t)' ' | attr; asm volatile("");
+    vga[51] = (uint16_t)'V' | attr; asm volatile("");
+    vga[52] = (uint16_t)'e' | attr; asm volatile("");
+    vga[53] = (uint16_t)'r' | attr; asm volatile("");
+    vga[54] = (uint16_t)'s' | attr; asm volatile("");
+    vga[55] = (uint16_t)'i' | attr; asm volatile("");
+    vga[56] = (uint16_t)'o' | attr; asm volatile("");
+    vga[57] = (uint16_t)'n' | attr; asm volatile("");
+    vga[58] = (uint16_t)':' | attr; asm volatile("");
+    vga[59] = (uint16_t)'1' | attr; asm volatile("");
+    vga[60] = (uint16_t)'.' | attr; asm volatile("");
+    vga[61] = (uint16_t)'0' | attr; asm volatile("");
+    vga[62] = (uint16_t)'.' | attr; asm volatile("");
+    vga[63] = (uint16_t)'0' | attr; asm volatile("");
+    
+    serial_write("Title written.\n");
+    
+    // Initialize terminal (this sets up VGA text mode)
+    serial_write("Initializing terminal...\n");
     terminal.showCursor(true);
     
-    // Draw header with title FIRST (before clearing rows)
-    write_title("RusticOS            Level: Kernel            Version: 1.0.0");
-    
-    // Clear the rest of the screen (rows 1-24) with normal colors
-    volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
+    // Clear rows 1-24 with black background and light grey text
+    serial_write("Clearing screen rows 1-24...\n");
     for (int row = 1; row < 25; ++row) {
         for (int col = 0; col < 80; ++col) {
-            vga[row * 80 + col] = (uint16_t)' ' | (((uint16_t)((TerminalColor::BLACK << 4) | TerminalColor::LIGHT_GREY)) << 8);
+            vga[row * 80 + col] = (uint16_t)' ' | (((uint16_t)(0 << 4) | 7) << 8);  // BLACK bg, LIGHT_GREY fg
         }
     }
     
-    // Set colors for normal text and position cursor at row 2
+    // Set terminal colors to GREEN on BLACK and position cursor at row 2
+    serial_write("Setting colors and positioning cursor...\n");
     terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
     terminal.setCursor(0, 2);
     
-    // Print welcome message
+    // Print welcome messages
+    serial_write("Writing welcome messages...\n");
     terminal.write("Welcome to RusticOS!\n");
     terminal.write("Type 'help' for available commands.\n");
     terminal.write("Root filesystem mounted at '/'\n\n");
     
-    // Show initial prompt
+    // Show prompt
+    serial_write("Writing prompt...\n");
     terminal.write(">");
     prompt_start_x = terminal.getCursorX();
     prompt_start_y = terminal.getCursorY();
-    terminal.setCursor(prompt_start_x, prompt_start_y);
+    
+    serial_write("Setup complete, entering main loop.\n");
     
     // Main kernel loop
     while (true) {
-        // Poll keyboard for input
         poll_keyboard();
         
         // Small delay to prevent excessive CPU usage
