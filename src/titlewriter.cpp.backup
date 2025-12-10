@@ -17,3 +17,18 @@ void writeheader (const char* title) {
         iterator++;
     }
 }
+
+kernel_main() [kernel.cpp]
+  ├─ serial_write() [kernel.cpp - internal]
+  ├─ write_title() [kernel.cpp - direct VGA writes]
+  ├─ terminal.showCursor(true) [terminal.cpp]
+  ├─ terminal.setColor() [terminal.cpp]
+  ├─ terminal.setCursor() [terminal.cpp]
+  ├─ terminal.write() [terminal.cpp → putChar() loop]
+  ├─ command_system.reset_input() [command.cpp]
+  └─ Main Loop:
+      ├─ poll_keyboard() [kernel.cpp]
+      │  ├─ inb(0x64) / inb(0x60) [port I/O]
+      │  └─ command_system.process_input(ascii) [command.cpp]
+      │     └─ terminal.write() for echo [terminal.cpp]
+      └─ delay loop
