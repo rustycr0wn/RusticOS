@@ -5,6 +5,8 @@
 #include "filesystem.h"
 #include "command.h"
 
+#define VGA_ATTRIBUTE(fg, bg) (((bg) << 4) | (fg))
+
 // Track prompt start position to protect it from backspace
 static uint16_t prompt_start_x = 0;
 static uint16_t prompt_start_y = 0;
@@ -105,7 +107,7 @@ bool poll_keyboard() {
             bool can_delete = (curY > prompt_start_y) || (curY == prompt_start_y && curX > prompt_start_x);
             if (can_delete && curX > 0) {
                 terminal.setCursor(curX - 1, curY);
-            terminal.putChar(' ');
+                terminal.putChar(' ');
                 terminal.setCursor(curX - 1, curY);
             }
         } else {
@@ -119,26 +121,39 @@ bool poll_keyboard() {
     return false;
 }
 
+// Write title text to row 0 with black on green background
+void write_title(const char* title) {
+    volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
+    
+    // GREEN background (2), BLACK foreground (0)
+    // Attribute format: (BG << 4) | FG = (2 << 4) | 0 = 0x20
+    // Shift left 8 bits for high byte: 0x2000
+    uint16_t attr = 0x2000;
+    
+    // Fill entire row (80 columns) with string data first
+    for (int col = 0; col < 80; col++) {
+        vga[col] = title[col] | attr;
+    }
+}
+
 extern "C" void kernel_main() {
     // Initialize components
-    terminal.clear();
     terminal.showCursor(true);
     
-    // Draw header (row 0) with green background, black text, full width
-    terminal.setColor(TerminalColor::BLACK, TerminalColor::GREEN);
-    const char* title = "RusticOS        Level: Kernel        Version:1.0.0";
-    int len = 50;
-    int x = (80 - len) / 2;
-    for (int col = 0; col < 80; ++col) {
-        char ch = (col >= x && col < x + len) ? title[col - x] : ' ';
-        terminal.writeAt(&ch, col, 0);
+    // Draw header with title FIRST (before clearing rows)
+    write_title("RusticOS            Level: Kernel            Version: 1.0.0");
+    
+    // Clear the rest of the screen (rows 1-24) with normal colors
+    volatile uint16_t* vga = (volatile uint16_t*)0xB8000;
+    for (int row = 1; row < 25; ++row) {
+        for (int col = 0; col < 80; ++col) {
+            vga[row * 80 + col] = (uint16_t)' ' | (((uint16_t)((TerminalColor::BLACK << 4) | TerminalColor::LIGHT_GREY)) << 8);
+        }
     }
     
-    // Set colors for normal text
+    // Set colors for normal text and position cursor at row 2
     terminal.setColor(TerminalColor::GREEN, TerminalColor::BLACK);
-    
-    // Add extra line before welcome message
-    terminal.write("\n\n");
+    terminal.setCursor(0, 2);
     
     // Print welcome message
     terminal.write("Welcome to RusticOS!\n");

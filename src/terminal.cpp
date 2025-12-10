@@ -47,8 +47,11 @@ Terminal::Terminal()
 
 void Terminal::clear() {
     // Fill the entire screen with spaces using current colors
+    // Attribute byte format: BLINK|BG[2:0]|INTENSITY|FG[2:0]
+    // Correct encoding: (BG << 4 | FG) << 8
     for (uint32_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
-        VGA_BUFFER[i] = (uint16_t)' ' | (uint16_t)(background_color << 12) | (uint16_t)(foreground_color << 8);
+        uint16_t attr = ((uint16_t)(background_color << 4) | (uint16_t)foreground_color) << 8;
+        VGA_BUFFER[i] = (uint16_t)' ' | attr;
     }
     cursor_x = cursor_y = 0;
     update_cursor();
