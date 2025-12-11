@@ -154,10 +154,10 @@ bootloader: $(BOOTLOADER_BIN)
 # Alias for the full disk image
 image: $(DISK_IMG)
 
-# Run in QEMU with stdio
+# Run in QEMU with VNC display
 run: $(DISK_IMG)
-	@echo "Running QEMU..."
-	@$(QEMU) -drive format=raw,file=$< -m 512M -serial file:/tmp/qemu_serial.log
+	@echo "Running QEMU on VNC localhost:5900..."
+	@pkill -9 qemu; sleep 1; $(QEMU) -drive format=raw,file=$< -m 512M -vnc :0 2>&1 | head -20 &
 
 # Run in QEMU with debugging (no reboot on halt)
 run-debug: $(DISK_IMG)
