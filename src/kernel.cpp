@@ -98,6 +98,30 @@ static inline void outb(uint16_t port, uint8_t value) {
 }
 
 /* ============================================================================
+ * SIMPLE VGA TEXT PRINTER
+ * ============================================================================ */
+
+/**
+ * Print a string to VGA at a specific row
+ * Uses individual character writes to bypass compiler optimization
+ * 
+ * @param row Screen row (0-24)
+ * @param text String to print
+ * @param color VGA attribute byte (foreground and background colors)
+ */
+static void print_at_row(int row, const char* text, uint16_t color) {
+    volatile uint16_t* vga = VGA_BUFFER;
+    int offset = row * VGA_WIDTH;
+    
+    for (int i = 0; text[i] != '\0'; i++) {
+        uint16_t entry = ((uint16_t)text[i]) | color;
+        vga[offset + i] = entry;
+        // Memory barrier to prevent compiler optimization
+        __asm__ __volatile__("" : : : "memory");
+    }
+}
+
+/* ============================================================================
  * KEYBOARD INPUT HANDLING
  * ============================================================================ */
 
@@ -204,75 +228,42 @@ static void write_title() {
     // Write title string character by character with explicit delays
     // Position 15: "RusticOS"
     vga[15] = (uint16_t)'R' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[16] = (uint16_t)'u' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[17] = (uint16_t)'s' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[18] = (uint16_t)'t' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[19] = (uint16_t)'i' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[20] = (uint16_t)'c' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[21] = (uint16_t)'O' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[22] = (uint16_t)'S' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     
     // Position 31: "Level:Kernel"
     vga[31] = (uint16_t)'L' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[32] = (uint16_t)'e' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[33] = (uint16_t)'v' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[34] = (uint16_t)'e' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[35] = (uint16_t)'l' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[36] = (uint16_t)':' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[37] = (uint16_t)'K' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[38] = (uint16_t)'e' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[39] = (uint16_t)'r' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[40] = (uint16_t)'n' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[41] = (uint16_t)'e' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[42] = (uint16_t)'l' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     
     // Position 51: "Version:1.0.0"
     vga[51] = (uint16_t)'V' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[52] = (uint16_t)'e' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[53] = (uint16_t)'r' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[54] = (uint16_t)'s' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[55] = (uint16_t)'i' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[56] = (uint16_t)'o' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[57] = (uint16_t)'n' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[58] = (uint16_t)':' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[59] = (uint16_t)'1' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[60] = (uint16_t)'.' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[61] = (uint16_t)'0' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[62] = (uint16_t)'.' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
     vga[63] = (uint16_t)'0' | attr;
-    for (volatile int delay = 0; delay < 100; delay++);
 }
 
 /* ============================================================================
@@ -352,6 +343,27 @@ static void init_vga() {
 }
 
 /**
+ * Set cursor position via VGA CRTC registers
+ * Position is calculated as: row * 80 + col
+ * 
+ * @param row Row number (0-24)
+ * @param col Column number (0-79)
+ */
+static void set_cursor_position(uint8_t row, uint8_t col) {
+    uint16_t pos = row * VGA_WIDTH + col;
+    
+    // Set high byte of cursor position
+    outb(VGA_CRTC_INDEX, CRTC_CURSOR_HIGH);
+    outb(VGA_CRTC_DATA, (uint8_t)(pos >> 8));
+    
+    // Set low byte of cursor position
+    outb(VGA_CRTC_INDEX, CRTC_CURSOR_LOW);
+    outb(VGA_CRTC_DATA, (uint8_t)(pos & 0xFF));
+    
+    for (volatile int i = 0; i < DELAY_SHORT; i++);
+}
+
+/**
  * Initialize PS/2 keyboard controller
  * 
  * Sends a series of commands to the keyboard controller:
@@ -426,39 +438,27 @@ extern "C" void kernel_main() {
     for (int i = 0; i < VGA_WIDTH; i++) {
         VGA_BUFFER[i] = (uint16_t)' ' | VGA_GREEN_BLACK;
     }
+
     write_title();
     
-    // Write text directly to VGA (rows 2-4)
+    // Write text directly to VGA using simple print function
     serial_write("Writing welcome text...\n");
-    volatile uint16_t* vga = VGA_BUFFER;
     uint16_t attr = VGA_ATTR(TerminalColor::GREEN, TerminalColor::BLACK);
     
     // Row 2: Welcome message
-    const char* welcome1 = "Welcome to RusticOS!";
-    int col = 0;
-    for (const char* p = welcome1; *p; p++) {
-        vga[VGA_WIDTH * 2 + col] = (uint16_t)*p | attr;
-        col++;
-    }
+    print_at_row(2, "Welcome to RusticOS!", attr);
     
     // Row 3: Help text
-    const char* welcome2 = "Type 'help' for available commands.";
-    col = 0;
-    for (const char* p = welcome2; *p; p++) {
-        vga[VGA_WIDTH * 3 + col] = (uint16_t)*p | attr;
-        col++;
-    }
+    print_at_row(3, "Type 'help' for available commands.", attr);
     
     // Row 4: Filesystem info
-    const char* welcome3 = "Root filesystem mounted at '/'";
-    col = 0;
-    for (const char* p = welcome3; *p; p++) {
-        vga[VGA_WIDTH * 4 + col] = (uint16_t)*p | attr;
-        col++;
-    }
+    print_at_row(4, "Root filesystem mounted at '/'", attr);
     
     // Row 6: Command prompt
-    vga[VGA_WIDTH * 6] = (uint16_t)'>' | attr;
+    print_at_row(6, ">", attr);
+    
+    // Set cursor position to right after the '>' prompt (row 6, col 1)
+    set_cursor_position(6, 1);
     
     serial_write("Display ready.\n");
     
